@@ -1,0 +1,66 @@
+name: Release APK
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag, for example v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.0
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5.4.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4.0.1
+
+      - name: Install Android packages
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6.2.0
+        with:
+          gradle-version: "9.6.1"
+
+      - name: Build debug APK
+        run: gradle :app:assembleDebug
+
+      - name: Prepare release asset
+        run: |
+          mkdir -p release
+          cp app/build/outputs/apk/debug/app-debug.apk release/mutsumi-card-debug.apk
+
+      - name: Resolve release tag
+        id: release_tag
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "tag=${{ inputs.tag_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v3.0.1
+        with:
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          name: 记忆卡片 ${{ steps.release_tag.outputs.tag }}
+          files: release/mutsumi-card-debug.apk
+          generate_release_notes: true

@@ -4,6 +4,17 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+val releaseStoreFilePath = providers.environmentVariable("MUTSUMI_RELEASE_STORE_FILE").orNull
+val releaseStorePassword = providers.environmentVariable("MUTSUMI_RELEASE_STORE_PASSWORD").orNull
+val releaseKeyAlias = providers.environmentVariable("MUTSUMI_RELEASE_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.environmentVariable("MUTSUMI_RELEASE_KEY_PASSWORD").orNull
+val releaseSigningReady = listOf(
+    releaseStoreFilePath,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { !it.isNullOrBlank() }
+
 android {
     namespace = "com.mutsumi.card"
     compileSdk = 36
@@ -12,9 +23,29 @@ android {
         applicationId = "com.mutsumi.card"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        create("release") {
+            if (releaseSigningReady) {
+                storeFile = file(requireNotNull(releaseStoreFilePath))
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            if (releaseSigningReady) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
     }
 
     buildFeatures {
@@ -24,6 +55,21 @@ android {
     testOptions {
         unitTests.isIncludeAndroidResources = true
     }
+}
+
+tasks.register("checkReleaseSigning") {
+    doLast {
+        check(releaseSigningReady) {
+            "Release 签名缺少环境变量：MUTSUMI_RELEASE_STORE_FILE、MUTSUMI_RELEASE_STORE_PASSWORD、MUTSUMI_RELEASE_KEY_ALIAS、MUTSUMI_RELEASE_KEY_PASSWORD"
+        }
+        check(file(requireNotNull(releaseStoreFilePath)).exists()) {
+            "Release keystore 文件不存在：$releaseStoreFilePath"
+        }
+    }
+}
+
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn("checkReleaseSigning")
 }
 
 dependencies {

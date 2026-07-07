@@ -7,7 +7,7 @@ class BackupWorkflowTest {
     @Test
     fun exportClickReturnsVisibleFeedback() {
         val deck = CardDeckState()
-        deck.saveCard("雨の音", 2)
+        deck.saveCard("雨の音", "images/value-1.png", strokeCount = 2)
 
         val message = BackupActions.exportMessage(deck.cards.size)
 
@@ -23,4 +23,3 @@ class BackupWorkflowTest {
         assertThat(message).contains("文件选择器")
     }
 }
-

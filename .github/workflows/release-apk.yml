@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Release tag, for example v0.1.0"
+        description: "Release tag, for example v0.2.0"
         required: true
         type: string
 
@@ -16,38 +16,54 @@ permissions:
 
 jobs:
   release:
-    name: Build and publish APK
+    name: 构建并发布 APK
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: 拉取代码
         uses: actions/checkout@v7.0.0
 
-      - name: Set up JDK
+      - name: 设置 JDK
         uses: actions/setup-java@v5.4.0
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
+      - name: 设置 Android SDK
         uses: android-actions/setup-android@v4.0.1
 
-      - name: Install Android packages
+      - name: 安装 Android 包
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
-      - name: Set up Gradle
+      - name: 设置 Gradle
         uses: gradle/actions/setup-gradle@v6.2.0
         with:
           gradle-version: "9.6.1"
 
-      - name: Build debug APK
-        run: gradle :app:assembleDebug
+      - name: 写入 release 签名文件
+        env:
+          MUTSUMI_RELEASE_KEYSTORE_B64: ${{ secrets.MUTSUMI_RELEASE_KEYSTORE_B64 }}
+        run: |
+          test -n "$MUTSUMI_RELEASE_KEYSTORE_B64"
+          echo "$MUTSUMI_RELEASE_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/mutsumi-release.jks"
 
-      - name: Prepare release asset
+      - name: 构建 release APK
+        env:
+          MUTSUMI_RELEASE_STORE_FILE: ${{ runner.temp }}/mutsumi-release.jks
+          MUTSUMI_RELEASE_STORE_PASSWORD: ${{ secrets.MUTSUMI_RELEASE_STORE_PASSWORD }}
+          MUTSUMI_RELEASE_KEY_ALIAS: ${{ secrets.MUTSUMI_RELEASE_KEY_ALIAS }}
+          MUTSUMI_RELEASE_KEY_PASSWORD: ${{ secrets.MUTSUMI_RELEASE_KEY_PASSWORD }}
+        run: gradle :app:testDebugUnitTest :app:assembleRelease
+
+      - name: 验证 APK 签名
+        run: $ANDROID_HOME/build-tools/36.0.0/apksigner verify --verbose app/build/outputs/apk/release/app-release.apk
+
+      - name: 准备发布文件
         run: |
           mkdir -p release
-          cp app/build/outputs/apk/debug/app-debug.apk release/mutsumi-card-debug.apk
+          cp app/build/outputs/apk/release/app-release.apk release/mutsumi-card-release.apk
+          sha256sum release/mutsumi-card-release.apk > release/mutsumi-card-release.apk.sha256
 
-      - name: Resolve release tag
+      - name: 解析发布标签
         id: release_tag
         shell: bash
         run: |
@@ -57,10 +73,12 @@ jobs:
             echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Publish GitHub release
+      - name: 发布 GitHub Release
         uses: softprops/action-gh-release@v3.0.1
         with:
           tag_name: ${{ steps.release_tag.outputs.tag }}
           name: 记忆卡片 ${{ steps.release_tag.outputs.tag }}
-          files: release/mutsumi-card-debug.apk
+          files: |
+            release/mutsumi-card-release.apk
+            release/mutsumi-card-release.apk.sha256
           generate_release_notes: true

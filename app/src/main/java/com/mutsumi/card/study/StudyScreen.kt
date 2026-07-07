@@ -31,11 +31,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.mutsumi.card.domain.review.ReviewFeedback
 import com.mutsumi.card.domain.workflow.MemoryCard
+import com.mutsumi.card.ui.CardValueImage
+import java.io.File
 
 @Composable
 fun StudyScreen(
     cards: List<MemoryCard>,
     currentCardId: Long?,
+    imageRoot: File,
     onFeedback: (Long, ReviewFeedback) -> String,
 ) {
     if (cards.isEmpty()) {
@@ -75,10 +78,14 @@ fun StudyScreen(
                 ) {
                     Text(card.keyText, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     Box(
-                        modifier = Modifier.fillMaxWidth().weight(1f),
+                        modifier = Modifier.fillMaxWidth().weight(1f).padding(vertical = 12.dp),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text(if (imageVisible) card.valueDescription else "点击显示图片")
+                        if (imageVisible) {
+                            CardValueImage(card = card, imageRoot = imageRoot, modifier = Modifier.fillMaxSize())
+                        } else {
+                            Text("点击显示图片")
+                        }
                     }
                     FeedbackRow { feedback ->
                         message = onFeedback(card.id, feedback)
@@ -111,4 +118,3 @@ private fun FeedbackRow(onFeedback: (ReviewFeedback) -> Unit) {
         }
     }
 }
-

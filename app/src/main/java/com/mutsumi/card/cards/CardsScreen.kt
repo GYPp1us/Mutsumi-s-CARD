@@ -21,11 +21,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.mutsumi.card.domain.workflow.MemoryCard
+import com.mutsumi.card.ui.CardValueImage
+import java.io.File
 
 @Composable
 fun CardsScreen(
     cards: List<MemoryCard>,
     selectedCardId: Long?,
+    imageRoot: File,
     onSelectCard: (MemoryCard) -> Unit,
     onAddSampleCard: () -> Unit,
 ) {
@@ -48,6 +51,11 @@ fun CardsScreen(
                     Text("当前选择", style = MaterialTheme.typography.labelMedium)
                     Text(it.keyText, fontWeight = FontWeight.Bold)
                     Text(it.valueDescription, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    CardValueImage(
+                        card = it,
+                        imageRoot = imageRoot,
+                        modifier = Modifier.fillMaxWidth().height(160.dp),
+                    )
                 }
             }
         }
@@ -71,4 +79,3 @@ fun CardsScreen(
         }
     }
 }
-

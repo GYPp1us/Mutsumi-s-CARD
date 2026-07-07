@@ -8,8 +8,8 @@ class StudyWorkflowTest {
     @Test
     fun knownFeedbackMovesToAnotherCardWhenPossible() {
         val deck = CardDeckState()
-        val first = deck.saveCard("雨の音", 2).card
-        val second = deck.saveCard("木漏れ日", 2).card
+        val first = deck.saveCard("雨の音", "images/value-1.png", strokeCount = 2).card
+        val second = deck.saveCard("木漏れ日", "images/value-2.png", strokeCount = 2).card
         val session = StudySession()
 
         val next = session.applyFeedback(
@@ -25,7 +25,7 @@ class StudyWorkflowTest {
     @Test
     fun knownFeedbackKeepsSingleCardAvailable() {
         val deck = CardDeckState()
-        val only = deck.saveCard("雨の音", 2).card
+        val only = deck.saveCard("雨の音", "images/value-1.png", strokeCount = 2).card
         val session = StudySession()
 
         val next = session.applyFeedback(
@@ -37,4 +37,3 @@ class StudyWorkflowTest {
         assertThat(next.card.id).isEqualTo(only.id)
     }
 }
-

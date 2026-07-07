@@ -3,13 +3,24 @@ package com.mutsumi.card.domain.workflow
 import com.mutsumi.card.domain.review.ReviewFeedback
 import com.mutsumi.card.domain.review.WeightedCardPicker
 import com.mutsumi.card.domain.review.WeightedReviewCard
+import kotlinx.serialization.Serializable
 
+@Serializable
 data class MemoryCard(
     val id: Long,
     val keyText: String,
+    val valueImagePath: String,
     val valueDescription: String,
     val strokeCount: Int,
+    val baseImagePath: String? = null,
     val weight: Double = 1.0,
+)
+
+@Serializable
+data class CardDeckSnapshot(
+    val cards: List<MemoryCard>,
+    val nextCardId: Long,
+    val selectedCardId: Long?,
 )
 
 data class SaveCardResult(
@@ -31,18 +42,29 @@ class CardDeckState(
     var selectedCardId: Long? = initialCards.firstOrNull()?.id
         private set
 
+    val nextCardId: Long
+        get() = nextId
+
     val cards: List<MemoryCard>
         get() = mutableCards.toList()
 
-    fun saveCard(keyText: String, strokeCount: Int): SaveCardResult {
+    fun saveCard(
+        keyText: String,
+        valueImagePath: String,
+        baseImagePath: String? = null,
+        strokeCount: Int,
+    ): SaveCardResult {
         require(keyText.isNotBlank()) { "key 不能为空" }
+        require(valueImagePath.isNotBlank()) { "图片 value 不能为空" }
         require(strokeCount > 0) { "图片 value 至少需要一笔绘制内容" }
 
         val card = MemoryCard(
             id = nextId++,
             keyText = keyText.trim(),
-            valueDescription = "手绘图片，笔画 $strokeCount",
+            valueImagePath = valueImagePath.trim(),
+            valueDescription = "手绘图片，笔画 $strokeCount；保存结果与当前预览图一致，包含底图、笔刷颜色、笔刷大小和画布缩放/移动位置。",
             strokeCount = strokeCount,
+            baseImagePath = baseImagePath?.trim()?.takeIf { it.isNotEmpty() },
         )
         mutableCards += card
         selectedCardId = card.id
@@ -54,6 +76,28 @@ class CardDeckState(
             ?: throw IllegalArgumentException("卡片不存在：$cardId")
         selectedCardId = card.id
         return card
+    }
+
+    fun toSnapshot(): CardDeckSnapshot {
+        return CardDeckSnapshot(
+            cards = cards,
+            nextCardId = nextId,
+            selectedCardId = selectedCardId,
+        )
+    }
+
+    companion object {
+        fun fromSnapshot(snapshot: CardDeckSnapshot): CardDeckState {
+            require(snapshot.nextCardId > 0) { "下一张卡片 ID 必须大于 0" }
+            snapshot.cards.forEach { card ->
+                require(card.keyText.isNotBlank()) { "快照存在空 key 卡片：${card.id}" }
+                require(card.valueImagePath.isNotBlank()) { "快照存在空图片卡片：${card.id}" }
+            }
+            return CardDeckState(snapshot.cards).also { deck ->
+                deck.nextId = snapshot.nextCardId
+                snapshot.selectedCardId?.let { deck.selectCard(it) }
+            }
+        }
     }
 }
 
@@ -102,8 +146,29 @@ object BackupActions {
 
 fun seedCards(): List<MemoryCard> {
     return listOf(
-        MemoryCard(id = 1, keyText = "雨の音", valueDescription = "示例图片 value", strokeCount = 2, weight = 1.0),
-        MemoryCard(id = 2, keyText = "木漏れ日", valueDescription = "示例图片 value", strokeCount = 3, weight = 1.3),
-        MemoryCard(id = 3, keyText = "夕焼け", valueDescription = "示例图片 value", strokeCount = 2, weight = 0.7),
+        MemoryCard(
+            id = 1,
+            keyText = "雨の音",
+            valueImagePath = "sample://rain",
+            valueDescription = "示例图片 value",
+            strokeCount = 2,
+            weight = 1.0,
+        ),
+        MemoryCard(
+            id = 2,
+            keyText = "木漏れ日",
+            valueImagePath = "sample://sun",
+            valueDescription = "示例图片 value",
+            strokeCount = 3,
+            weight = 1.3,
+        ),
+        MemoryCard(
+            id = 3,
+            keyText = "夕焼け",
+            valueImagePath = "sample://dusk",
+            valueDescription = "示例图片 value",
+            strokeCount = 2,
+            weight = 0.7,
+        ),
     )
 }

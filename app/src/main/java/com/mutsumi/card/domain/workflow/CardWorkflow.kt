@@ -73,11 +73,11 @@ class StudySession(
         }
 
         val candidates = cards.filterNot { it.id == current.id }.ifEmpty { cards }
-        val picked = picker.pick(
+        val pickedId = picker.pick(
             cards = candidates.map { WeightedReviewCard(cardId = it.id, weight = it.weight) },
             recentCardIds = listOf(current.id),
-        ) ?: current
-        val nextCard = cards.first { it.id == picked.cardId }
+        )?.cardId ?: current.id
+        val nextCard = cards.first { it.id == pickedId }
         return StudyTransition(nextCard, "已标记为记住了，切换到下一张：${nextCard.keyText}")
     }
 
@@ -107,4 +107,3 @@ fun seedCards(): List<MemoryCard> {
         MemoryCard(id = 3, keyText = "夕焼け", valueDescription = "示例图片 value", strokeCount = 2, weight = 0.7),
     )
 }
-

@@ -20,6 +20,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -29,11 +30,27 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.mutsumi.card.domain.review.ReviewFeedback
+import com.mutsumi.card.domain.workflow.MemoryCard
 
 @Composable
-fun StudyScreen() {
-    var imageVisible by remember { mutableStateOf(false) }
+fun StudyScreen(
+    cards: List<MemoryCard>,
+    currentCardId: Long?,
+    onFeedback: (Long, ReviewFeedback) -> String,
+) {
+    if (cards.isEmpty()) {
+        EmptyStudyState()
+        return
+    }
+
+    val card = cards.firstOrNull { it.id == currentCardId } ?: cards.first()
+    var imageVisible by remember(card.id) { mutableStateOf(false) }
     var message by remember { mutableStateOf("点击卡片查看图片") }
+
+    LaunchedEffect(card.id) {
+        imageVisible = false
+        message = "当前推荐：${card.keyText}"
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Text(text = "随机推荐", style = MaterialTheme.typography.titleMedium)
@@ -56,24 +73,27 @@ fun StudyScreen() {
                     modifier = Modifier.fillMaxSize().padding(18.dp),
                     verticalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    Text("雨の音", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text(card.keyText, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     Box(
                         modifier = Modifier.fillMaxWidth().weight(1f),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text(if (imageVisible) "图片 value" else "点击显示图片")
+                        Text(if (imageVisible) card.valueDescription else "点击显示图片")
                     }
-                    FeedbackRow {
-                        imageVisible = false
-                        message = when (it) {
-                            ReviewFeedback.Again -> "已标记为记不住，后续会更常出现"
-                            ReviewFeedback.Unsure -> "已标记为模糊，后续会稍微增加"
-                            ReviewFeedback.Know -> "已标记为记住了，后续会降低频率"
-                        }
+                    FeedbackRow { feedback ->
+                        message = onFeedback(card.id, feedback)
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun EmptyStudyState() {
+    Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(text = "随机推荐", style = MaterialTheme.typography.titleMedium)
+        Text("当前卡组为空，请先到“绘制”录入第一张卡片。")
     }
 }
 

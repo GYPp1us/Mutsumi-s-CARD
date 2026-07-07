@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.mutsumi.card.ui.navigation.AppDestination
+import kotlin.math.roundToInt
 
 @Composable
 fun AdaptiveScaffold(
@@ -29,7 +30,7 @@ fun AdaptiveScaffold(
     content: @Composable () -> Unit,
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        if (maxWidth >= 840.dp) {
+        if (AdaptiveLayoutPolicy.useNavigationRail(maxWidth.value.roundToInt(), maxHeight.value.roundToInt())) {
             Row(modifier = Modifier.fillMaxSize()) {
                 NavigationRail {
                     destinations.forEach { destination ->
@@ -76,4 +77,3 @@ private fun DestinationGlyph(destination: AppDestination) {
         }
     }
 }
-

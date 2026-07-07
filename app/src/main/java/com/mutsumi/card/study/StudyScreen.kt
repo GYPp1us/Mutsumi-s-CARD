@@ -146,7 +146,7 @@ private fun FloatingStudyCard(
     ) {
         Box(modifier = Modifier.fillMaxSize().padding(8.dp), contentAlignment = Alignment.Center) {
             if (showingBack) {
-                Box(modifier = Modifier.graphicsLayer { rotationY = 180f }.fillMaxSize()) {
+                Box(modifier = Modifier.graphicsLayer { this.rotationY = 180f }.fillMaxSize()) {
                     CardValueImage(card = card, imageRoot = imageRoot, modifier = Modifier.fillMaxSize())
                 }
             } else {

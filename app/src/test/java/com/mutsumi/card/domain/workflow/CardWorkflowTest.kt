@@ -18,6 +18,8 @@ class CardWorkflowTest {
         assertThat(deck.cards).hasSize(1)
         assertThat(deck.cards.first().keyText).isEqualTo("雨の音")
         assertThat(deck.cards.first().valueImagePath).isEqualTo("images/value-1.png")
+        assertThat(deck.cards.first().valueDescription).doesNotContain("保存结果")
+        assertThat(deck.cards.first().valueDescription).doesNotContain("当前预览")
         assertThat(result.message).contains("已保存")
     }
 

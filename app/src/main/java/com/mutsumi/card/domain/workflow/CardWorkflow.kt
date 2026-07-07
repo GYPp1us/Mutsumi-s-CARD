@@ -62,7 +62,7 @@ class CardDeckState(
             id = nextId++,
             keyText = keyText.trim(),
             valueImagePath = valueImagePath.trim(),
-            valueDescription = "手绘图片，笔画 $strokeCount；保存结果与当前预览图一致，包含底图、笔刷颜色、笔刷大小和画布缩放/移动位置。",
+            valueDescription = "手绘图片，笔画 $strokeCount",
             strokeCount = strokeCount,
             baseImagePath = baseImagePath?.trim()?.takeIf { it.isNotEmpty() },
         )

@@ -6,7 +6,6 @@ enum class AppDestination(
 ) {
     Study("学习", "学"),
     Cards("卡片", "卡"),
-    Draw("绘制", "笔"),
+    Draw("录入", "笔"),
     Backup("备份", "备"),
 }
-

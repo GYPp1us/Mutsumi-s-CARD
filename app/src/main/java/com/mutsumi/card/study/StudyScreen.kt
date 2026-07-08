@@ -6,7 +6,8 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -41,7 +43,6 @@ import com.mutsumi.card.domain.review.ReviewFeedback
 import com.mutsumi.card.domain.workflow.MemoryCard
 import com.mutsumi.card.ui.CardValueImage
 import java.io.File
-import kotlin.math.abs
 
 @Composable
 fun StudyScreen(
@@ -57,28 +58,29 @@ fun StudyScreen(
 
     val card = cards.firstOrNull { it.id == currentCardId } ?: cards.first()
     var message by remember { mutableStateOf("左右滑动翻面，上滑记住，下滑忘记") }
-    var backVisible by remember(card.id) { mutableStateOf(false) }
-    var dragOffset by remember(card.id) { mutableStateOf(Offset.Zero) }
+    var committedSide by remember(card.id) { mutableStateOf(CardSide.Front) }
+    var activeProjection by remember(card.id) { mutableStateOf<StudyGestureProjection?>(null) }
     var cardSize by remember { mutableStateOf(IntSize.Zero) }
     val tilt = rememberGyroTilt()
 
     LaunchedEffect(card.id) {
-        backVisible = false
-        dragOffset = Offset.Zero
+        committedSide = CardSide.Front
+        activeProjection = null
         message = "当前推荐：${card.keyText}"
     }
 
     val policy = remember(cardSize) {
         StudyGesturePolicy(
+            screenWidth = cardSize.width.coerceAtLeast(1).toFloat(),
             cardWidth = cardSize.width.coerceAtLeast(1).toFloat(),
             cardHeight = cardSize.height.coerceAtLeast(1).toFloat(),
         )
     }
-    val flipProgress = policy.flipProgress(dragOffset.x)
-    val baseRotation = if (backVisible) 180f else 0f
-    val rotationY = baseRotation + flipProgress * 180f + tilt.y
-    val normalized = ((rotationY % 360f) + 360f) % 360f
-    val showingBack = normalized in 90f..270f
+    val restingProjection = policy.resting(committedSide)
+    val projection = activeProjection ?: restingProjection.copy(
+        rotationX = restingProjection.rotationX + tilt.x,
+        rotationY = restingProjection.rotationY + if (restingProjection.showingBack) -tilt.y else tilt.y,
+    )
 
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(text = "随机推荐", style = MaterialTheme.typography.titleMedium)
@@ -87,22 +89,27 @@ fun StudyScreen(
             FloatingStudyCard(
                 card = card,
                 imageRoot = imageRoot,
-                showingBack = showingBack,
-                rotationY = rotationY,
-                rotationX = tilt.x + (dragOffset.y / cardSize.height.coerceAtLeast(1)) * -8f,
+                projection = projection,
                 onSizeChange = { cardSize = it },
-                onDragChange = { dragOffset += it },
-                onDragEnd = {
-                    val feedback = policy.feedbackFor(dragOffset.y)
-                    if (feedback != null && abs(dragOffset.y) > abs(dragOffset.x)) {
-                        message = onFeedback(card.id, feedback)
-                    } else {
-                        if (abs(policy.flipProgress(dragOffset.x)) >= 1f) {
-                            backVisible = !backVisible
+                onProjectionChange = { activeProjection = it },
+                onGestureEnd = { releaseAction ->
+                    when (releaseAction) {
+                        is StudyReleaseAction.Feedback -> {
+                            message = onFeedback(card.id, releaseAction.feedback)
+                            committedSide = CardSide.Front
                         }
+                        StudyReleaseAction.ToggleSide -> {
+                            committedSide = when (committedSide) {
+                                CardSide.Front -> CardSide.Back
+                                CardSide.Back -> CardSide.Front
+                            }
+                        }
+                        null -> Unit
                     }
-                    dragOffset = Offset.Zero
+                    activeProjection = null
                 },
+                policy = policy,
+                committedSide = committedSide,
                 modifier = Modifier.fillMaxWidth(0.98f).aspectRatio(2f),
             )
         }
@@ -113,12 +120,12 @@ fun StudyScreen(
 private fun FloatingStudyCard(
     card: MemoryCard,
     imageRoot: File,
-    showingBack: Boolean,
-    rotationY: Float,
-    rotationX: Float,
+    projection: StudyGestureProjection,
     onSizeChange: (IntSize) -> Unit,
-    onDragChange: (Offset) -> Unit,
-    onDragEnd: () -> Unit,
+    onProjectionChange: (StudyGestureProjection) -> Unit,
+    onGestureEnd: (StudyReleaseAction?) -> Unit,
+    policy: StudyGesturePolicy,
+    committedSide: CardSide,
     modifier: Modifier = Modifier,
 ) {
     Card(
@@ -126,26 +133,50 @@ private fun FloatingStudyCard(
             .onSizeChanged(onSizeChange)
             .graphicsLayer {
                 cameraDistance = 14f * density
-                this.rotationY = rotationY
-                this.rotationX = rotationX
+                this.rotationY = projection.rotationY
+                this.rotationX = projection.rotationX
+                this.translationX = projection.translationX
+                this.translationY = projection.translationY
+                this.alpha = projection.alpha
                 shadowElevation = 18f
             }
-            .pointerInput(card.id) {
-                detectDragGestures(
-                    onDrag = { change, dragAmount ->
-                        onDragChange(dragAmount)
-                        change.consume()
-                    },
-                    onDragEnd = onDragEnd,
-                    onDragCancel = onDragEnd,
-                )
+            .pointerInput(card.id, committedSide, policy) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val anchor = StudyTouchPoint(down.position.x, down.position.y)
+                    var latestProjection = policy.project(anchor, anchor, committedSide)
+                    onProjectionChange(latestProjection)
+
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: event.changes.firstOrNull()
+                        if (change == null) {
+                            onGestureEnd(latestProjection.releaseAction)
+                            break
+                        }
+                        if (change.changedToUp()) {
+                            onGestureEnd(latestProjection.releaseAction)
+                            change.consume()
+                            break
+                        }
+                        if (change.pressed) {
+                            latestProjection = policy.project(
+                                anchor = anchor,
+                                current = StudyTouchPoint(change.position.x, change.position.y),
+                                committedSide = committedSide,
+                            )
+                            onProjectionChange(latestProjection)
+                            change.consume()
+                        }
+                    }
+                }
             },
         shape = RoundedCornerShape(8.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Box(modifier = Modifier.fillMaxSize().padding(8.dp), contentAlignment = Alignment.Center) {
-            if (showingBack) {
+            if (projection.showingBack) {
                 Box(modifier = Modifier.graphicsLayer { this.rotationY = 180f }.fillMaxSize()) {
                     CardValueImage(card = card, imageRoot = imageRoot, modifier = Modifier.fillMaxSize())
                 }

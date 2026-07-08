@@ -10,6 +10,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -36,6 +37,7 @@ import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -69,49 +71,55 @@ fun StudyScreen(
         message = "当前推荐：${card.keyText}"
     }
 
-    val policy = remember(cardSize) {
-        StudyGesturePolicy(
-            screenWidth = cardSize.width.coerceAtLeast(1).toFloat(),
-            cardWidth = cardSize.width.coerceAtLeast(1).toFloat(),
-            cardHeight = cardSize.height.coerceAtLeast(1).toFloat(),
-        )
-    }
-    val restingProjection = policy.resting(committedSide)
-    val projection = activeProjection ?: restingProjection.copy(
-        rotationX = restingProjection.rotationX + tilt.x,
-        rotationY = restingProjection.rotationY + if (restingProjection.showingBack) -tilt.y else tilt.y,
-    )
-
-    Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(text = "随机推荐", style = MaterialTheme.typography.titleMedium)
-        Text(text = message, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-            FloatingStudyCard(
-                card = card,
-                imageRoot = imageRoot,
-                projection = projection,
-                onSizeChange = { cardSize = it },
-                onProjectionChange = { activeProjection = it },
-                onGestureEnd = { releaseAction ->
-                    when (releaseAction) {
-                        is StudyReleaseAction.Feedback -> {
-                            message = onFeedback(card.id, releaseAction.feedback)
-                            committedSide = CardSide.Front
-                        }
-                        StudyReleaseAction.ToggleSide -> {
-                            committedSide = when (committedSide) {
-                                CardSide.Front -> CardSide.Back
-                                CardSide.Back -> CardSide.Front
-                            }
-                        }
-                        null -> Unit
-                    }
-                    activeProjection = null
-                },
-                policy = policy,
-                committedSide = committedSide,
-                modifier = Modifier.fillMaxWidth(0.98f).aspectRatio(2f),
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val density = LocalDensity.current
+        val screenWidthPx = with(density) { maxWidth.toPx() }
+        val screenHeightPx = with(density) { maxHeight.toPx() }
+        val policy = remember(cardSize, screenWidthPx, screenHeightPx) {
+            StudyGesturePolicy(
+                screenWidth = screenWidthPx.coerceAtLeast(1f),
+                screenHeight = screenHeightPx.coerceAtLeast(1f),
+                cardWidth = cardSize.width.coerceAtLeast(1).toFloat(),
+                cardHeight = cardSize.height.coerceAtLeast(1).toFloat(),
             )
+        }
+        val restingProjection = policy.resting(committedSide)
+        val projection = activeProjection ?: restingProjection.copy(
+            rotationX = restingProjection.rotationX + tilt.x,
+            rotationY = restingProjection.rotationY + if (restingProjection.showingBack) -tilt.y else tilt.y,
+        )
+
+        Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(text = "随机推荐", style = MaterialTheme.typography.titleMedium)
+            Text(text = message, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                FloatingStudyCard(
+                    card = card,
+                    imageRoot = imageRoot,
+                    projection = projection,
+                    onSizeChange = { cardSize = it },
+                    onProjectionChange = { activeProjection = it },
+                    onGestureEnd = { releaseAction ->
+                        when (releaseAction) {
+                            is StudyReleaseAction.Feedback -> {
+                                message = onFeedback(card.id, releaseAction.feedback)
+                                committedSide = CardSide.Front
+                            }
+                            StudyReleaseAction.ToggleSide -> {
+                                committedSide = when (committedSide) {
+                                    CardSide.Front -> CardSide.Back
+                                    CardSide.Back -> CardSide.Front
+                                }
+                            }
+                            null -> Unit
+                        }
+                        activeProjection = null
+                    },
+                    policy = policy,
+                    committedSide = committedSide,
+                    modifier = Modifier.fillMaxWidth(0.98f).aspectRatio(2f),
+                )
+            }
         }
     }
 }
@@ -137,8 +145,8 @@ private fun FloatingStudyCard(
                 this.rotationX = projection.rotationX
                 this.translationX = projection.translationX
                 this.translationY = projection.translationY
-                this.alpha = projection.alpha
-                shadowElevation = 18f
+                this.alpha = projection.cardAlpha
+                shadowElevation = 0f
             }
             .pointerInput(card.id, committedSide, policy) {
                 awaitEachGesture {
@@ -172,20 +180,32 @@ private fun FloatingStudyCard(
                 }
             },
         shape = RoundedCornerShape(8.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Box(modifier = Modifier.fillMaxSize().padding(8.dp), contentAlignment = Alignment.Center) {
-            if (projection.showingBack) {
-                Box(modifier = Modifier.graphicsLayer { this.rotationY = 180f }.fillMaxSize()) {
-                    CardValueImage(card = card, imageRoot = imageRoot, modifier = Modifier.fillMaxSize())
-                }
-            } else {
+            Box(
+                modifier = Modifier
+                    .graphicsLayer { alpha = projection.frontAlpha }
+                    .fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
                 Text(
                     text = card.keyText,
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold,
                 )
+            }
+            Box(
+                modifier = Modifier
+                    .graphicsLayer {
+                        alpha = projection.backAlpha
+                        this.rotationY = 180f
+                    }
+                    .fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
+                    CardValueImage(card = card, imageRoot = imageRoot, modifier = Modifier.fillMaxSize())
             }
         }
     }

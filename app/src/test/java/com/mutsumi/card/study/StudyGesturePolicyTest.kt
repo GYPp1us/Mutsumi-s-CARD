@@ -5,7 +5,12 @@ import com.mutsumi.card.domain.review.ReviewFeedback
 import org.junit.Test
 
 class StudyGesturePolicyTest {
-    private val policy = StudyGesturePolicy(screenWidth = 1000f, cardWidth = 980f, cardHeight = 490f)
+    private val policy = StudyGesturePolicy(
+        screenWidth = 1000f,
+        screenHeight = 1200f,
+        cardWidth = 980f,
+        cardHeight = 490f,
+    )
     private val anchor = StudyTouchPoint(500f, 500f)
 
     @Test
@@ -21,6 +26,7 @@ class StudyGesturePolicyTest {
         assertThat(projection.flipProgress).isWithin(0.01f).of(0f)
         assertThat(projection.releaseAction).isNull()
         assertThat(projection.showingBack).isFalse()
+        assertThat(projection.cardAlpha).isEqualTo(1f)
     }
 
     @Test
@@ -36,6 +42,14 @@ class StudyGesturePolicyTest {
         assertThat(fullFlip.flipProgress).isWithin(0.01f).of(1f)
         assertThat(fullFlip.rotationY).isWithin(0.01f).of(180f)
         assertThat(fullFlip.showingBack).isTrue()
+    }
+
+    @Test
+    fun completedFlipNeverRotatesPastOneHundredEightyDegrees() {
+        val projection = policy.project(anchor, StudyTouchPoint(1300f, 500f), CardSide.Front)
+
+        assertThat(projection.flipProgress).isWithin(0.01f).of(1f)
+        assertThat(projection.rotationY).isWithin(0.01f).of(180f)
     }
 
     @Test
@@ -61,28 +75,49 @@ class StudyGesturePolicyTest {
     }
 
     @Test
-    fun upwardDragOutsideQuarterScreenFollowsFingerAndFades() {
-        val projection = policy.project(anchor, StudyTouchPoint(500f, 200f), CardSide.Front)
+    fun cardKeepsPhysicalOpacityDuringUpwardDrag() {
+        val projection = policy.project(anchor, StudyTouchPoint(500f, 100f), CardSide.Front)
 
-        assertThat(projection.translationY).isLessThan(-130f)
-        assertThat(projection.alpha).isLessThan(0.75f)
-        assertThat(projection.releaseAction).isEqualTo(StudyReleaseAction.Feedback(ReviewFeedback.Know))
+        assertThat(projection.translationY).isLessThan(-250f)
+        assertThat(projection.cardAlpha).isEqualTo(1f)
+        assertThat(projection.frontAlpha).isEqualTo(1f)
     }
 
     @Test
-    fun downwardDragOutsideQuarterScreenTriggersAgain() {
-        val projection = policy.project(anchor, StudyTouchPoint(500f, 800f), CardSide.Front)
+    fun upwardReleaseUsesOneThirdScreenHeight() {
+        val justInside = policy.project(anchor, StudyTouchPoint(500f, 101f), CardSide.Front)
+        val atThreshold = policy.project(anchor, StudyTouchPoint(500f, 100f), CardSide.Front)
 
-        assertThat(projection.translationY).isGreaterThan(130f)
-        assertThat(projection.releaseAction).isEqualTo(StudyReleaseAction.Feedback(ReviewFeedback.Again))
+        assertThat(justInside.releaseAction).isNull()
+        assertThat(atThreshold.releaseAction).isEqualTo(StudyReleaseAction.Feedback(ReviewFeedback.Know))
+    }
+
+    @Test
+    fun downwardReleaseUsesOneThirdScreenHeight() {
+        val justInside = policy.project(anchor, StudyTouchPoint(500f, 899f), CardSide.Front)
+        val atThreshold = policy.project(anchor, StudyTouchPoint(500f, 900f), CardSide.Front)
+
+        assertThat(justInside.releaseAction).isNull()
+        assertThat(atThreshold.releaseAction).isEqualTo(StudyReleaseAction.Feedback(ReviewFeedback.Again))
     }
 
     @Test
     fun upwardIntentSuppressesHorizontalOffsetAndFlip() {
-        val projection = policy.project(anchor, StudyTouchPoint(700f, 200f), CardSide.Front)
+        val projection = policy.project(anchor, StudyTouchPoint(700f, 100f), CardSide.Front)
 
         assertThat(projection.translationX).isLessThan(30f)
         assertThat(projection.flipProgress).isWithin(0.01f).of(0f)
         assertThat(projection.releaseAction).isEqualTo(StudyReleaseAction.Feedback(ReviewFeedback.Know))
+    }
+
+    @Test
+    fun faceAlphasComeFromProjectionInsteadOfConditionalTreeSwitching() {
+        val front = policy.project(anchor, StudyTouchPoint(625f, 500f), CardSide.Front)
+        val back = policy.project(anchor, StudyTouchPoint(850f, 500f), CardSide.Front)
+
+        assertThat(front.frontAlpha).isEqualTo(1f)
+        assertThat(front.backAlpha).isEqualTo(0f)
+        assertThat(back.frontAlpha).isEqualTo(0f)
+        assertThat(back.backAlpha).isEqualTo(1f)
     }
 }

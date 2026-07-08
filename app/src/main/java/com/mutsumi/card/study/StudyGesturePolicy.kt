@@ -2,9 +2,7 @@ package com.mutsumi.card.study
 
 import com.mutsumi.card.domain.review.ReviewFeedback
 import kotlin.math.abs
-import kotlin.math.exp
 import kotlin.math.hypot
-import kotlin.math.max
 import kotlin.math.sign
 
 data class StudyTouchPoint(
@@ -79,7 +77,7 @@ class StudyGesturePolicy(
         val dy = current.y - anchor.y
         val distance = hypot(rawDx, dy).coerceAtLeast(0.0001f)
         val rho = distance / radius
-        val outer = outerEase(rho)
+        val outer = outerMotion(rho)
         val unitX = rawDx / distance
         val unitY = dy / distance
 
@@ -97,31 +95,23 @@ class StudyGesturePolicy(
 
         val upSuppression = horizontalSuppressionForUp(upWeight = upWeight, outer = outer)
         val effectiveDx = rawDx * upSuppression
+        val rotationDelta = horizontalRotationDelta(effectiveDx)
         val flipProgress = flipProgress(effectiveDx)
-        val signedFlipAngle = sign(effectiveDx).takeIf { it != 0f }
-            ?.let { it * 180f * abs(flipProgress).coerceAtMost(1f) }
-            ?: 0f
 
         val verticalAction = outer * verticalWeight
-        val horizontalAction = outer * horizontalWeight
-        val translationX = if (abs(flipProgress) > 0f) 0f else effectiveDx * horizontalAction * 0.12f
+        val translationX = 0f
         val translationY = dy * verticalAction
 
-        val actionSuppression = smoothstep(0f, 0.3f, outer) * max(horizontalWeight, verticalWeight)
-        val tiltWeight = (1f - actionSuppression).coerceIn(0f, 1f)
         val inner = smoothstep(0f, 1f, rho.coerceAtMost(1f))
-        val tiltX = -unitY * maxTilt * inner * tiltWeight
-        val tiltY = unitX * maxTilt * inner * tiltWeight
+        val tiltX = -unitY * maxTilt * inner
 
-        val visualAngle = committedSide.baseAngle + signedFlipAngle
+        val visualAngle = committedSide.baseAngle + rotationDelta
         val showingBack = visualAngle.isBackFacing()
-        val normalSign = if (showingBack) -1f else 1f
-        val rotationY = visualAngle + tiltY * normalSign
         val faceAlpha = faceAlpha(visualAngle)
 
         return StudyGestureProjection(
             rotationX = tiltX,
-            rotationY = rotationY,
+            rotationY = visualAngle,
             translationX = translationX,
             translationY = translationY,
             cardAlpha = 1f,
@@ -163,14 +153,27 @@ class StudyGesturePolicy(
         return sign(effectiveDx) * smoothstep(0f, 1f, rawFlip)
     }
 
-    private fun horizontalSuppressionForUp(upWeight: Float, outer: Float): Float {
-        val upDominance = upWeight * outer
-        return 1f - 0.95f * smoothstep(0.2f, 0.8f, upDominance)
+    private fun horizontalRotationDelta(effectiveDx: Float): Float {
+        val direction = sign(effectiveDx)
+        if (direction == 0f) return 0f
+
+        val absoluteDx = abs(effectiveDx)
+        val innerRatio = (absoluteDx / radius).coerceIn(0f, 1f)
+        val tiltAngle = maxTilt * smoothstep(0f, 1f, innerRatio)
+        val flipRatio = ((absoluteDx - radius) / flipBand).coerceIn(0f, 1f)
+        val flipAngle = (180f - maxTilt) * smoothstep(0f, 1f, flipRatio)
+
+        return direction * (tiltAngle + flipAngle).coerceAtMost(180f)
     }
 
-    private fun outerEase(rho: Float): Float {
-        val x = (rho - 1f).coerceAtLeast(0f)
-        return 1f - exp(-3f * x)
+    private fun horizontalSuppressionForUp(upWeight: Float, outer: Float): Float {
+        val upDominance = upWeight * outer
+        return 1f - 0.98f * smoothstep(0.15f, 0.85f, upDominance)
+    }
+
+    private fun outerMotion(rho: Float): Float {
+        val t = (rho - 1f).coerceIn(0f, 1f)
+        return 1f - (1f - t) * (1f - t) * (1f - t)
     }
 
     private fun smoothstep(edge0: Float, edge1: Float, x: Float): Float {
@@ -184,24 +187,11 @@ class StudyGesturePolicy(
     }
 
     private fun faceAlpha(angle: Float): FaceAlpha {
-        val normalized = ((angle % 360f) + 360f) % 360f
-        val frontToBack = smoothstep(88f, 92f, normalized)
-        val backToFront = smoothstep(268f, 272f, normalized)
-        val front = when {
-            normalized < 88f -> 1f
-            normalized <= 92f -> 1f - frontToBack
-            normalized < 268f -> 0f
-            normalized <= 272f -> backToFront
-            else -> 1f
+        return if (angle.isBackFacing()) {
+            FaceAlpha(front = 0f, back = 1f)
+        } else {
+            FaceAlpha(front = 1f, back = 0f)
         }
-        val back = when {
-            normalized < 88f -> 0f
-            normalized <= 92f -> frontToBack
-            normalized < 268f -> 1f
-            normalized <= 272f -> 1f - backToFront
-            else -> 0f
-        }
-        return FaceAlpha(front = front, back = back)
     }
 
     private data class FaceAlpha(

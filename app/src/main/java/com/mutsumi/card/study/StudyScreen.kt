@@ -5,7 +5,8 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
@@ -17,8 +18,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.changedToUp
@@ -136,7 +136,9 @@ private fun FloatingStudyCard(
     committedSide: CardSide,
     modifier: Modifier = Modifier,
 ) {
-    Card(
+    val shape = RoundedCornerShape(8.dp)
+
+    Box(
         modifier = modifier
             .onSizeChanged(onSizeChange)
             .graphicsLayer {
@@ -147,7 +149,12 @@ private fun FloatingStudyCard(
                 this.translationY = projection.translationY
                 this.alpha = projection.cardAlpha
                 shadowElevation = 0f
+                this.shape = shape
+                clip = true
             }
+            .background(MaterialTheme.colorScheme.surface, shape)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
+            .clip(shape)
             .pointerInput(card.id, committedSide, policy) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -179,9 +186,7 @@ private fun FloatingStudyCard(
                     }
                 }
             },
-        shape = RoundedCornerShape(8.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        contentAlignment = Alignment.Center,
     ) {
         Box(modifier = Modifier.fillMaxSize().padding(8.dp), contentAlignment = Alignment.Center) {
             Box(
@@ -200,12 +205,12 @@ private fun FloatingStudyCard(
                 modifier = Modifier
                     .graphicsLayer {
                         alpha = projection.backAlpha
-                        this.rotationY = 180f
+                        scaleX = -1f
                     }
                     .fillMaxSize(),
                 contentAlignment = Alignment.Center,
             ) {
-                    CardValueImage(card = card, imageRoot = imageRoot, modifier = Modifier.fillMaxSize())
+                CardValueImage(card = card, imageRoot = imageRoot, modifier = Modifier.fillMaxSize())
             }
         }
     }

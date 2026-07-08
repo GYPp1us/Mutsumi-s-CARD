@@ -30,12 +30,14 @@ class StudyGesturePolicyTest {
     }
 
     @Test
-    fun rightDragAfterQuarterScreenFlipsWithinOneTenthScreenWidth() {
+    fun rightDragAfterQuarterScreenCarriesTiltIntoFlipBand() {
+        val boundary = policy.project(anchor, StudyTouchPoint(750f, 500f), CardSide.Front)
         val halfFlip = policy.project(anchor, StudyTouchPoint(800f, 500f), CardSide.Front)
         val fullFlip = policy.project(anchor, StudyTouchPoint(850f, 500f), CardSide.Front)
 
+        assertThat(boundary.rotationY).isWithin(0.01f).of(12f)
         assertThat(halfFlip.flipProgress).isWithin(0.01f).of(0.5f)
-        assertThat(halfFlip.rotationY).isWithin(0.01f).of(90f)
+        assertThat(halfFlip.rotationY).isWithin(0.01f).of(96f)
         assertThat(halfFlip.showingBack).isTrue()
         assertThat(halfFlip.releaseAction).isEqualTo(StudyReleaseAction.ToggleSide)
 
@@ -78,7 +80,7 @@ class StudyGesturePolicyTest {
     fun cardKeepsPhysicalOpacityDuringUpwardDrag() {
         val projection = policy.project(anchor, StudyTouchPoint(500f, 100f), CardSide.Front)
 
-        assertThat(projection.translationY).isLessThan(-250f)
+        assertThat(projection.translationY).isLessThan(-360f)
         assertThat(projection.cardAlpha).isEqualTo(1f)
         assertThat(projection.frontAlpha).isEqualTo(1f)
     }

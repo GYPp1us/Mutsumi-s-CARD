@@ -223,43 +223,6 @@ private fun FloatingStudyCard(
     )
 }
 
-private fun interpolateStudyCardPhysicalState(
-    from: StudyCardPhysicalState,
-    to: StudyCardPhysicalState,
-    fraction: Float,
-): StudyCardPhysicalState {
-    val t = fraction.coerceIn(0f, 1f)
-    return StudyCardPhysicalState(
-        center = StudyCardCenter(
-            x = lerp(from.center.x, to.center.x, t),
-            y = lerp(from.center.y, to.center.y, t),
-        ),
-        angle = StudyCardAngle(
-            axisRotationZ = lerpAngleDegrees(from.angle.axisRotationZ, to.angle.axisRotationZ, t),
-            deflection = lerp(from.angle.deflection, to.angle.deflection, t).coerceIn(0f, 180f),
-        ),
-    )
-}
-
-private fun lerp(start: Float, stop: Float, fraction: Float): Float {
-    return start + (stop - start) * fraction
-}
-
-private fun lerpAngleDegrees(start: Float, stop: Float, fraction: Float): Float {
-    return start + shortestAngleDeltaDegrees(start, stop) * fraction
-}
-
-private fun shortestAngleDeltaDegrees(start: Float, stop: Float): Float {
-    var delta = (stop - start) % 360f
-    if (delta <= -180f) {
-        delta += 360f
-    }
-    if (delta > 180f) {
-        delta -= 360f
-    }
-    return delta
-}
-
 @Composable
 private fun PhysicalStudyCard(
     card: MemoryCard,

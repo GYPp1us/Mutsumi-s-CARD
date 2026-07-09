@@ -145,10 +145,18 @@ class StudyGesturePolicyTest {
     fun upwardDragDoesNotSuppressThePhysicalHorizontalCenter() {
         val projection = policy.project(anchor, StudyTouchPoint(700f, 100f), CardSide.Front)
 
-        assertThat(projection.physicalState.center.x).isGreaterThan(120f)
+        assertThat(projection.physicalState.center.x).isWithin(0.01f).of(15f)
         assertThat(projection.physicalState.center.y).isLessThan(-250f)
         assertThat(projection.flipProgress).isWithin(0.01f).of(0f)
         assertThat(projection.releaseAction).isEqualTo(StudyReleaseAction.Feedback(ReviewFeedback.Know))
+    }
+
+    @Test
+    fun horizontalCenterMovementUsesSubtleFollowRatio() {
+        val projection = policy.project(anchor, StudyTouchPoint(900f, 500f), CardSide.Front)
+
+        assertThat(projection.physicalState.center.x).isWithin(0.01f).of(30f)
+        assertThat(projection.physicalState.center.y).isWithin(0.01f).of(0f)
     }
 
     @Test
@@ -168,7 +176,8 @@ class StudyGesturePolicyTest {
             screenWidth = screenWidth,
         )
 
-        assertThat(-vertical.center.y).isWithin(0.01f).of(horizontal.center.x)
+        assertThat(-vertical.center.y).isWithin(0.01f).of(400f)
+        assertThat(horizontal.center.x).isWithin(0.01f).of(30f)
         assertThat(vertical.center.x).isWithin(0.01f).of(0f)
         assertThat(horizontal.center.y).isWithin(0.01f).of(0f)
         assertThat(vertical.angle.deflection).isLessThan(horizontal.angle.deflection)
@@ -181,5 +190,26 @@ class StudyGesturePolicyTest {
         assertThat(studyCardReturnEasing(0f)).isWithin(0.0001f).of(0f)
         assertThat(studyCardReturnEasing(0.5f)).isGreaterThan(0.5f)
         assertThat(studyCardReturnEasing(1f)).isWithin(0.0001f).of(1f)
+    }
+
+    @Test
+    fun returnAnimationKeepsAxisContinuousWhenTargetFaceIsDegenerate() {
+        val start = StudyCardPhysicalState(
+            center = StudyCardCenter(x = 30f, y = 0f),
+            angle = StudyCardAngle(axisRotationZ = 180f, deflection = 174f),
+        )
+        val backResting = StudyCardPhysicalState(
+            center = StudyCardCenter(x = 0f, y = 0f),
+            angle = StudyCardAngle(axisRotationZ = 0f, deflection = 180f),
+        )
+
+        val middle = interpolateStudyCardPhysicalState(
+            from = start,
+            to = backResting,
+            fraction = 0.5f,
+        )
+
+        assertThat(middle.angle.axisRotationZ).isWithin(0.01f).of(180f)
+        assertThat(middle.angle.deflection).isWithin(0.01f).of(177f)
     }
 }

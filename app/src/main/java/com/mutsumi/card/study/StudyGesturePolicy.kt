@@ -57,6 +57,7 @@ fun studyCardPhysicsFromDrag(
     val actionBand = screenWidth / 10f
     val maxTilt = 12f
     val maxVerticalRoll = 32f
+    val horizontalCenterRatio = 0.075f
     val distance = hypot(dx, dy).coerceAtLeast(0.0001f)
     val rho = distance / radius
     val innerTilt = smoothstep(0f, 1f, rho.coerceAtMost(1f))
@@ -71,7 +72,7 @@ fun studyCardPhysicsFromDrag(
 
     return StudyCardPhysicalState(
         center = StudyCardCenter(
-            x = dx * centerMotion,
+            x = dx * centerMotion * horizontalCenterRatio,
             y = dy * centerMotion,
         ),
         angle = when (committedSide) {
@@ -91,6 +92,25 @@ fun studyCardReturnEasing(fraction: Float): Float {
     val t = fraction.coerceIn(0f, 1f)
     val inverse = 1f - t
     return 1f - inverse * inverse * inverse
+}
+
+fun interpolateStudyCardPhysicalState(
+    from: StudyCardPhysicalState,
+    to: StudyCardPhysicalState,
+    fraction: Float,
+): StudyCardPhysicalState {
+    val t = fraction.coerceIn(0f, 1f)
+    val continuousTarget = to.withContinuousAxisFrom(from)
+    return StudyCardPhysicalState(
+        center = StudyCardCenter(
+            x = lerp(from.center.x, continuousTarget.center.x, t),
+            y = lerp(from.center.y, continuousTarget.center.y, t),
+        ),
+        angle = StudyCardAngle(
+            axisRotationZ = lerpAngleDegrees(from.angle.axisRotationZ, continuousTarget.angle.axisRotationZ, t),
+            deflection = lerp(from.angle.deflection, continuousTarget.angle.deflection, t).coerceIn(0f, 180f),
+        ),
+    )
 }
 
 class StudyGesturePolicy(
@@ -205,6 +225,38 @@ private fun radialMotionOutsideNeighborhood(distance: Float, radius: Float, acti
 private fun smoothstep(edge0: Float, edge1: Float, x: Float): Float {
     val t = ((x - edge0) / (edge1 - edge0)).coerceIn(0f, 1f)
     return t * t * (3f - 2f * t)
+}
+
+private fun StudyCardPhysicalState.withContinuousAxisFrom(
+    start: StudyCardPhysicalState,
+): StudyCardPhysicalState {
+    if (!angle.deflection.isDegenerateFace()) {
+        return this
+    }
+    return copy(angle = angle.copy(axisRotationZ = start.angle.axisRotationZ))
+}
+
+private fun Float.isDegenerateFace(): Boolean {
+    return this <= 0.001f || this >= 179.999f
+}
+
+private fun lerp(start: Float, stop: Float, fraction: Float): Float {
+    return start + (stop - start) * fraction
+}
+
+private fun lerpAngleDegrees(start: Float, stop: Float, fraction: Float): Float {
+    return start + shortestAngleDeltaDegrees(start, stop) * fraction
+}
+
+private fun shortestAngleDeltaDegrees(start: Float, stop: Float): Float {
+    var delta = (stop - start) % 360f
+    if (delta <= -180f) {
+        delta += 360f
+    }
+    if (delta > 180f) {
+        delta -= 360f
+    }
+    return delta
 }
 
 private fun Float.toRadians(): Double = this / 180.0 * PI

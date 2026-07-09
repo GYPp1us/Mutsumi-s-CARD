@@ -48,6 +48,7 @@ fun studyCardPhysicsFromDrag(
     dx: Float,
     dy: Float,
     committedSide: CardSide,
+    interactionStartDirection: CardSide = committedSide,
     screenWidth: Float,
 ): StudyCardPhysicalState {
     require(screenWidth > 0f) { "灞忓箷瀹藉害蹇呴』澶т簬 0" }
@@ -55,13 +56,18 @@ fun studyCardPhysicsFromDrag(
     val radius = screenWidth / 4f
     val actionBand = screenWidth / 10f
     val maxTilt = 12f
+    val maxVerticalRoll = 32f
     val distance = hypot(dx, dy).coerceAtLeast(0.0001f)
     val rho = distance / radius
     val innerTilt = smoothstep(0f, 1f, rho.coerceAtMost(1f))
     val centerMotion = radialMotionOutsideNeighborhood(distance, radius, actionBand)
     val actionRatio = ((distance - radius) / actionBand).coerceIn(0f, 1f)
-    val dragDeflection = maxTilt * innerTilt + (180f - maxTilt) * smoothstep(0f, 1f, actionRatio)
-    val axisRotationZ = atan2(dy, dx).toDegrees()
+    val rawDeflection = maxTilt * innerTilt + (180f - maxTilt) * smoothstep(0f, 1f, actionRatio)
+    val horizontalWeight = (abs(dx) / distance).coerceIn(0f, 1f)
+    val directionalLimit = maxVerticalRoll +
+        (180f - maxVerticalRoll) * smoothstep(0.2f, 0.85f, horizontalWeight)
+    val dragDeflection = rawDeflection.coerceAtMost(directionalLimit)
+    val axisRotationZ = (atan2(dy, dx).toDegrees() + interactionStartDirection.axisOffset).normalizeDegrees()
 
     return StudyCardPhysicalState(
         center = StudyCardCenter(
@@ -79,6 +85,12 @@ fun studyCardPhysicsFromDrag(
             )
         },
     )
+}
+
+fun studyCardReturnEasing(fraction: Float): Float {
+    val t = fraction.coerceIn(0f, 1f)
+    val inverse = 1f - t
+    return 1f - inverse * inverse * inverse
 }
 
 class StudyGesturePolicy(
@@ -113,6 +125,7 @@ class StudyGesturePolicy(
         anchor: StudyTouchPoint,
         current: StudyTouchPoint,
         committedSide: CardSide,
+        interactionStartDirection: CardSide = committedSide,
     ): StudyGestureProjection {
         val rawDx = current.x - anchor.x
         val dy = current.y - anchor.y
@@ -135,6 +148,7 @@ class StudyGesturePolicy(
             dx = rawDx,
             dy = dy,
             committedSide = committedSide,
+            interactionStartDirection = interactionStartDirection,
             screenWidth = screenWidth,
         )
         val flipProgress = horizontalFlipProgress(rawDx, radius, flipBand)
@@ -197,7 +211,24 @@ private fun Float.toRadians(): Double = this / 180.0 * PI
 
 private fun Float.toDegrees(): Float = (this * 180f / PI.toFloat())
 
+private fun Float.normalizeDegrees(): Float {
+    var value = this % 360f
+    if (value <= -180f) {
+        value += 360f
+    }
+    if (value > 180f) {
+        value -= 360f
+    }
+    return value
+}
+
 private val CardSide.baseDeflection: Float
+    get() = when (this) {
+        CardSide.Front -> 0f
+        CardSide.Back -> 180f
+    }
+
+private val CardSide.axisOffset: Float
     get() = when (this) {
         CardSide.Front -> 0f
         CardSide.Back -> 180f

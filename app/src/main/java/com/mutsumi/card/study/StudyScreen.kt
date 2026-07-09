@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -37,6 +39,12 @@ import com.mutsumi.card.domain.workflow.MemoryCard
 import com.mutsumi.card.ui.CardValueImage
 import java.io.File
 
+private data class StudyReturnAnimation(
+    val start: StudyCardPhysicalState,
+    val target: StudyCardPhysicalState,
+    val sequence: Int,
+)
+
 @Composable
 fun StudyScreen(
     cards: List<MemoryCard>,
@@ -53,11 +61,13 @@ fun StudyScreen(
     var message by remember { mutableStateOf("左右滑动翻面，上滑记住，下滑忘记") }
     var committedSide by remember(card.id) { mutableStateOf(CardSide.Front) }
     var activeProjection by remember(card.id) { mutableStateOf<StudyGestureProjection?>(null) }
+    var returnAnimation by remember(card.id) { mutableStateOf<StudyReturnAnimation?>(null) }
     var cardSize by remember { mutableStateOf(IntSize.Zero) }
 
     LaunchedEffect(card.id) {
         committedSide = CardSide.Front
         activeProjection = null
+        returnAnimation = null
         message = "当前推荐：${card.keyText}"
     }
 
@@ -74,7 +84,25 @@ fun StudyScreen(
             )
         }
         val restingProjection = policy.resting(committedSide)
-        val projection = activeProjection ?: restingProjection
+        val returnProgress = remember(card.id) { Animatable(1f) }
+
+        LaunchedEffect(returnAnimation?.sequence) {
+            val animation = returnAnimation ?: return@LaunchedEffect
+            returnProgress.snapTo(0f)
+            returnProgress.animateTo(1f, animationSpec = tween(durationMillis = 260))
+            if (returnAnimation?.sequence == animation.sequence) {
+                returnAnimation = null
+            }
+        }
+
+        val returnState = returnAnimation?.let { animation ->
+            interpolateStudyCardPhysicalState(
+                from = animation.start,
+                to = animation.target,
+                fraction = studyCardReturnEasing(returnProgress.value),
+            )
+        }
+        val renderedState = activeProjection?.physicalState ?: returnState ?: restingProjection.physicalState
 
         Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(text = "随机推荐", style = MaterialTheme.typography.titleMedium)
@@ -83,23 +111,44 @@ fun StudyScreen(
                 FloatingStudyCard(
                     card = card,
                     imageRoot = imageRoot,
-                    center = projection.physicalState.center,
-                    angle = projection.physicalState.angle,
+                    center = renderedState.center,
+                    angle = renderedState.angle,
                     onSizeChange = { cardSize = it },
-                    onProjectionChange = { activeProjection = it },
-                    onGestureEnd = { releaseAction ->
+                    onProjectionChange = {
+                        returnAnimation = null
+                        activeProjection = it
+                    },
+                    onGestureEnd = { releaseProjection ->
+                        val releaseAction = releaseProjection.releaseAction
                         when (releaseAction) {
                             is StudyReleaseAction.Feedback -> {
                                 message = onFeedback(card.id, releaseAction.feedback)
                                 committedSide = CardSide.Front
+                                returnAnimation = StudyReturnAnimation(
+                                    start = releaseProjection.physicalState,
+                                    target = policy.resting(CardSide.Front).physicalState,
+                                    sequence = (returnAnimation?.sequence ?: 0) + 1,
+                                )
                             }
                             StudyReleaseAction.ToggleSide -> {
-                                committedSide = when (committedSide) {
+                                val targetSide = when (committedSide) {
                                     CardSide.Front -> CardSide.Back
                                     CardSide.Back -> CardSide.Front
                                 }
+                                committedSide = targetSide
+                                returnAnimation = StudyReturnAnimation(
+                                    start = releaseProjection.physicalState,
+                                    target = policy.resting(targetSide).physicalState,
+                                    sequence = (returnAnimation?.sequence ?: 0) + 1,
+                                )
                             }
-                            null -> Unit
+                            null -> {
+                                returnAnimation = StudyReturnAnimation(
+                                    start = releaseProjection.physicalState,
+                                    target = restingProjection.physicalState,
+                                    sequence = (returnAnimation?.sequence ?: 0) + 1,
+                                )
+                            }
                         }
                         activeProjection = null
                     },
@@ -120,7 +169,7 @@ private fun FloatingStudyCard(
     angle: StudyCardAngle,
     onSizeChange: (IntSize) -> Unit,
     onProjectionChange: (StudyGestureProjection) -> Unit,
-    onGestureEnd: (StudyReleaseAction?) -> Unit,
+    onGestureEnd: (StudyGestureProjection) -> Unit,
     policy: StudyGesturePolicy,
     committedSide: CardSide,
     modifier: Modifier = Modifier,
@@ -129,18 +178,24 @@ private fun FloatingStudyCard(
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
             val anchor = StudyTouchPoint(down.position.x, down.position.y)
-            var latestProjection = policy.project(anchor, anchor, committedSide)
+            val interactionStartDirection = committedSide
+            var latestProjection = policy.project(
+                anchor = anchor,
+                current = anchor,
+                committedSide = committedSide,
+                interactionStartDirection = interactionStartDirection,
+            )
             onProjectionChange(latestProjection)
 
             while (true) {
                 val event = awaitPointerEvent()
                 val change = event.changes.firstOrNull { it.id == down.id } ?: event.changes.firstOrNull()
                 if (change == null) {
-                    onGestureEnd(latestProjection.releaseAction)
+                    onGestureEnd(latestProjection)
                     break
                 }
                 if (change.changedToUp()) {
-                    onGestureEnd(latestProjection.releaseAction)
+                    onGestureEnd(latestProjection)
                     change.consume()
                     break
                 }
@@ -149,6 +204,7 @@ private fun FloatingStudyCard(
                         anchor = anchor,
                         current = StudyTouchPoint(change.position.x, change.position.y),
                         committedSide = committedSide,
+                        interactionStartDirection = interactionStartDirection,
                     )
                     onProjectionChange(latestProjection)
                     change.consume()
@@ -165,6 +221,43 @@ private fun FloatingStudyCard(
         onSizeChange = onSizeChange,
         modifier = modifier.then(pointerModifier),
     )
+}
+
+private fun interpolateStudyCardPhysicalState(
+    from: StudyCardPhysicalState,
+    to: StudyCardPhysicalState,
+    fraction: Float,
+): StudyCardPhysicalState {
+    val t = fraction.coerceIn(0f, 1f)
+    return StudyCardPhysicalState(
+        center = StudyCardCenter(
+            x = lerp(from.center.x, to.center.x, t),
+            y = lerp(from.center.y, to.center.y, t),
+        ),
+        angle = StudyCardAngle(
+            axisRotationZ = lerpAngleDegrees(from.angle.axisRotationZ, to.angle.axisRotationZ, t),
+            deflection = lerp(from.angle.deflection, to.angle.deflection, t).coerceIn(0f, 180f),
+        ),
+    )
+}
+
+private fun lerp(start: Float, stop: Float, fraction: Float): Float {
+    return start + (stop - start) * fraction
+}
+
+private fun lerpAngleDegrees(start: Float, stop: Float, fraction: Float): Float {
+    return start + shortestAngleDeltaDegrees(start, stop) * fraction
+}
+
+private fun shortestAngleDeltaDegrees(start: Float, stop: Float): Float {
+    var delta = (stop - start) % 360f
+    if (delta <= -180f) {
+        delta += 360f
+    }
+    if (delta > 180f) {
+        delta -= 360f
+    }
+    return delta
 }
 
 @Composable

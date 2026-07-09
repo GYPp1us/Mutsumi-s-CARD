@@ -73,6 +73,29 @@ class StudyGesturePolicyTest {
     }
 
     @Test
+    fun backSideInteractionStartsFromReversedVisibleAxis() {
+        val front = studyCardPhysicsFromDrag(
+            dx = 125f,
+            dy = 0f,
+            committedSide = CardSide.Front,
+            interactionStartDirection = CardSide.Front,
+            screenWidth = screenWidth,
+        )
+        val back = studyCardPhysicsFromDrag(
+            dx = 125f,
+            dy = 0f,
+            committedSide = CardSide.Back,
+            interactionStartDirection = CardSide.Back,
+            screenWidth = screenWidth,
+        )
+
+        assertThat(front.angle.axisRotationZ).isWithin(0.01f).of(0f)
+        assertThat(front.angle.deflection).isWithin(0.01f).of(6f)
+        assertThat(back.angle.axisRotationZ).isWithin(0.01f).of(180f)
+        assertThat(180f - back.angle.deflection).isWithin(0.01f).of(front.angle.deflection)
+    }
+
+    @Test
     fun physicalDeflectionStaysBetweenFrontAndBackFaces() {
         val frontOvershoot = policy.project(anchor, StudyTouchPoint(1300f, 500f), CardSide.Front)
         val backOvershoot = policy.project(anchor, StudyTouchPoint(1300f, 500f), CardSide.Back)
@@ -88,7 +111,16 @@ class StudyGesturePolicyTest {
 
         assertThat(projection.physicalState.center.y).isLessThan(-250f)
         assertThat(projection.physicalState.angle.axisRotationZ).isWithin(0.01f).of(-90f)
+        assertThat(projection.physicalState.angle.deflection).isWithin(0.01f).of(32f)
+    }
+
+    @Test
+    fun horizontalDragStillAllowsAFullFlipAfterVerticalRollLimit() {
+        val projection = policy.project(anchor, StudyTouchPoint(850f, 500f), CardSide.Front)
+
+        assertThat(projection.physicalState.angle.axisRotationZ).isWithin(0.01f).of(0f)
         assertThat(projection.physicalState.angle.deflection).isWithin(0.01f).of(180f)
+        assertThat(projection.releaseAction).isEqualTo(StudyReleaseAction.ToggleSide)
     }
 
     @Test
@@ -125,20 +157,29 @@ class StudyGesturePolicyTest {
             dx = 0f,
             dy = -400f,
             committedSide = CardSide.Front,
+            interactionStartDirection = CardSide.Front,
             screenWidth = screenWidth,
         )
         val horizontal = studyCardPhysicsFromDrag(
             dx = 400f,
             dy = 0f,
             committedSide = CardSide.Front,
+            interactionStartDirection = CardSide.Front,
             screenWidth = screenWidth,
         )
 
         assertThat(-vertical.center.y).isWithin(0.01f).of(horizontal.center.x)
         assertThat(vertical.center.x).isWithin(0.01f).of(0f)
         assertThat(horizontal.center.y).isWithin(0.01f).of(0f)
-        assertThat(vertical.angle.deflection).isWithin(0.01f).of(horizontal.angle.deflection)
+        assertThat(vertical.angle.deflection).isLessThan(horizontal.angle.deflection)
         assertThat(vertical.angle.axisRotationZ).isWithin(0.01f).of(-90f)
         assertThat(horizontal.angle.axisRotationZ).isWithin(0.01f).of(0f)
+    }
+
+    @Test
+    fun returnAnimationEasingIsNonLinearAndEndsAtRest() {
+        assertThat(studyCardReturnEasing(0f)).isWithin(0.0001f).of(0f)
+        assertThat(studyCardReturnEasing(0.5f)).isGreaterThan(0.5f)
+        assertThat(studyCardReturnEasing(1f)).isWithin(0.0001f).of(1f)
     }
 }

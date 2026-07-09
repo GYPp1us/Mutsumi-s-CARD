@@ -1,10 +1,5 @@
 package com.mutsumi.card.study
 
-import android.content.Context
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
-import android.hardware.SensorManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -21,22 +16,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
@@ -63,7 +54,6 @@ fun StudyScreen(
     var committedSide by remember(card.id) { mutableStateOf(CardSide.Front) }
     var activeProjection by remember(card.id) { mutableStateOf<StudyGestureProjection?>(null) }
     var cardSize by remember { mutableStateOf(IntSize.Zero) }
-    val tilt = rememberGyroTilt()
 
     LaunchedEffect(card.id) {
         committedSide = CardSide.Front
@@ -84,10 +74,7 @@ fun StudyScreen(
             )
         }
         val restingProjection = policy.resting(committedSide)
-        val projection = activeProjection ?: restingProjection.copy(
-            rotationX = restingProjection.rotationX + tilt.x,
-            rotationY = restingProjection.rotationY + if (restingProjection.showingBack) -tilt.y else tilt.y,
-        )
+        val projection = activeProjection ?: restingProjection
 
         Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(text = "随机推荐", style = MaterialTheme.typography.titleMedium)
@@ -96,7 +83,8 @@ fun StudyScreen(
                 FloatingStudyCard(
                     card = card,
                     imageRoot = imageRoot,
-                    projection = projection,
+                    center = projection.physicalState.center,
+                    angle = projection.physicalState.angle,
                     onSizeChange = { cardSize = it },
                     onProjectionChange = { activeProjection = it },
                     onGestureEnd = { releaseAction ->
@@ -128,7 +116,8 @@ fun StudyScreen(
 private fun FloatingStudyCard(
     card: MemoryCard,
     imageRoot: File,
-    projection: StudyGestureProjection,
+    center: StudyCardCenter,
+    angle: StudyCardAngle,
     onSizeChange: (IntSize) -> Unit,
     onProjectionChange: (StudyGestureProjection) -> Unit,
     onGestureEnd: (StudyReleaseAction?) -> Unit,
@@ -136,123 +125,126 @@ private fun FloatingStudyCard(
     committedSide: CardSide,
     modifier: Modifier = Modifier,
 ) {
+    val pointerModifier = Modifier.pointerInput(card.id, committedSide, policy) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            val anchor = StudyTouchPoint(down.position.x, down.position.y)
+            var latestProjection = policy.project(anchor, anchor, committedSide)
+            onProjectionChange(latestProjection)
+
+            while (true) {
+                val event = awaitPointerEvent()
+                val change = event.changes.firstOrNull { it.id == down.id } ?: event.changes.firstOrNull()
+                if (change == null) {
+                    onGestureEnd(latestProjection.releaseAction)
+                    break
+                }
+                if (change.changedToUp()) {
+                    onGestureEnd(latestProjection.releaseAction)
+                    change.consume()
+                    break
+                }
+                if (change.pressed) {
+                    latestProjection = policy.project(
+                        anchor = anchor,
+                        current = StudyTouchPoint(change.position.x, change.position.y),
+                        committedSide = committedSide,
+                    )
+                    onProjectionChange(latestProjection)
+                    change.consume()
+                }
+            }
+        }
+    }
+
+    PhysicalStudyCard(
+        card = card,
+        imageRoot = imageRoot,
+        center = center,
+        angle = angle,
+        onSizeChange = onSizeChange,
+        modifier = modifier.then(pointerModifier),
+    )
+}
+
+@Composable
+private fun PhysicalStudyCard(
+    card: MemoryCard,
+    imageRoot: File,
+    center: StudyCardCenter,
+    angle: StudyCardAngle,
+    onSizeChange: (IntSize) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val shape = RoundedCornerShape(8.dp)
+    val showingBack = angle.isStudyCardBackFacing()
 
     Box(
         modifier = modifier
             .onSizeChanged(onSizeChange)
             .graphicsLayer {
-                cameraDistance = 14f * density
-                this.rotationY = projection.rotationY
-                this.rotationX = projection.rotationX
-                this.translationX = projection.translationX
-                this.translationY = projection.translationY
-                this.alpha = projection.cardAlpha
-                shadowElevation = 0f
-                this.shape = shape
-                clip = true
-            }
-            .background(MaterialTheme.colorScheme.surface, shape)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
-            .clip(shape)
-            .pointerInput(card.id, committedSide, policy) {
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    val anchor = StudyTouchPoint(down.position.x, down.position.y)
-                    var latestProjection = policy.project(anchor, anchor, committedSide)
-                    onProjectionChange(latestProjection)
-
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: event.changes.firstOrNull()
-                        if (change == null) {
-                            onGestureEnd(latestProjection.releaseAction)
-                            break
-                        }
-                        if (change.changedToUp()) {
-                            onGestureEnd(latestProjection.releaseAction)
-                            change.consume()
-                            break
-                        }
-                        if (change.pressed) {
-                            latestProjection = policy.project(
-                                anchor = anchor,
-                                current = StudyTouchPoint(change.position.x, change.position.y),
-                                committedSide = committedSide,
-                            )
-                            onProjectionChange(latestProjection)
-                            change.consume()
-                        }
-                    }
-                }
+                this.translationX = center.x
+                this.translationY = center.y
             },
         contentAlignment = Alignment.Center,
     ) {
-        Box(modifier = Modifier.fillMaxSize().padding(8.dp), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    rotationZ = angle.axisRotationZ
+                },
+        ) {
             Box(
                 modifier = Modifier
-                    .graphicsLayer { alpha = projection.frontAlpha }
-                    .fillMaxSize(),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = card.keyText,
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-            Box(
-                modifier = Modifier
+                    .fillMaxSize()
                     .graphicsLayer {
-                        alpha = projection.backAlpha
-                        scaleX = -1f
-                    }
-                    .fillMaxSize(),
-                contentAlignment = Alignment.Center,
+                        cameraDistance = 14f * density
+                        rotationY = angle.deflection
+                        shadowElevation = 0f
+                    },
             ) {
-                CardValueImage(card = card, imageRoot = imageRoot, modifier = Modifier.fillMaxSize())
-            }
-        }
-    }
-}
-
-@Composable
-private fun rememberGyroTilt(): Offset {
-    val context = LocalContext.current
-    var tiltX by remember { mutableFloatStateOf(0f) }
-    var tiltY by remember { mutableFloatStateOf(0f) }
-
-    DisposableEffect(context) {
-        val manager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
-        val sensor = manager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
-            ?: manager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-        val listener = object : SensorEventListener {
-            private val rotation = FloatArray(9)
-            private val orientation = FloatArray(3)
-
-            override fun onSensorChanged(event: SensorEvent) {
-                if (event.sensor.type == Sensor.TYPE_ROTATION_VECTOR) {
-                    SensorManager.getRotationMatrixFromVector(rotation, event.values)
-                    SensorManager.getOrientation(rotation, orientation)
-                    tiltX = (orientation[1] * 8f).coerceIn(-6f, 6f)
-                    tiltY = (orientation[2] * -8f).coerceIn(-6f, 6f)
-                } else {
-                    tiltX = (event.values.getOrNull(1) ?: 0f).coerceIn(-6f, 6f)
-                    tiltY = (event.values.getOrNull(0) ?: 0f).coerceIn(-6f, 6f)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            rotationZ = -angle.axisRotationZ
+                            this.shape = shape
+                            clip = true
+                        }
+                        .background(MaterialTheme.colorScheme.surface, shape)
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
+                        .clip(shape)
+                        .padding(8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .graphicsLayer { alpha = if (showingBack) 0f else 1f }
+                            .fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = card.keyText,
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .graphicsLayer {
+                                alpha = if (showingBack) 1f else 0f
+                                scaleX = -1f
+                            }
+                            .fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CardValueImage(card = card, imageRoot = imageRoot, modifier = Modifier.fillMaxSize())
+                    }
                 }
             }
-
-            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
-        }
-        if (sensor != null) {
-            manager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_UI)
-        }
-        onDispose {
-            manager.unregisterListener(listener)
         }
     }
-
-    return Offset(tiltX, tiltY)
 }
 
 @Composable

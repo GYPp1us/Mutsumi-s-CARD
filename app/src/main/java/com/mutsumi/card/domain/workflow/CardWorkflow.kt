@@ -143,32 +143,3 @@ object BackupActions {
         return "导入入口已触发：下一步接入系统文件选择器"
     }
 }
-
-fun seedCards(): List<MemoryCard> {
-    return listOf(
-        MemoryCard(
-            id = 1,
-            keyText = "雨の音",
-            valueImagePath = "sample://rain",
-            valueDescription = "示例图片 value",
-            strokeCount = 2,
-            weight = 1.0,
-        ),
-        MemoryCard(
-            id = 2,
-            keyText = "木漏れ日",
-            valueImagePath = "sample://sun",
-            valueDescription = "示例图片 value",
-            strokeCount = 3,
-            weight = 1.3,
-        ),
-        MemoryCard(
-            id = 3,
-            keyText = "夕焼け",
-            valueImagePath = "sample://dusk",
-            valueDescription = "示例图片 value",
-            strokeCount = 2,
-            weight = 0.7,
-        ),
-    )
-}

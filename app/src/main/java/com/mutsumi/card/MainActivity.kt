@@ -10,9 +10,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             MutsumiCardTheme {
-                MutsumiCardApp()
+                MutsumiCardApp((application as MutsumiCardApplication).appContainer)
             }
         }
     }
 }
-

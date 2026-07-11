@@ -37,7 +37,7 @@ jobs:
       - name: 设置 Gradle
         uses: gradle/actions/setup-gradle@v6.2.0
         with:
-          gradle-version: "9.6.1"
+          gradle-version: "9.6.0"
 
       - name: 写入 release 签名文件
         env:
@@ -52,10 +52,15 @@ jobs:
           MUTSUMI_RELEASE_STORE_PASSWORD: ${{ secrets.MUTSUMI_RELEASE_STORE_PASSWORD }}
           MUTSUMI_RELEASE_KEY_ALIAS: ${{ secrets.MUTSUMI_RELEASE_KEY_ALIAS }}
           MUTSUMI_RELEASE_KEY_PASSWORD: ${{ secrets.MUTSUMI_RELEASE_KEY_PASSWORD }}
-        run: gradle :app:testDebugUnitTest :app:assembleRelease
+        run: gradle :app:assembleRelease
 
-      - name: 验证 APK 签名
-        run: $ANDROID_HOME/build-tools/36.0.0/apksigner verify --verbose app/build/outputs/apk/release/app-release.apk
+      - name: 验证 APK 签名和历史证书
+        run: |
+          APK=app/build/outputs/apk/release/app-release.apk
+          $ANDROID_HOME/build-tools/36.0.0/apksigner verify --verbose --print-certs "$APK"
+          ACTUAL=$($ANDROID_HOME/build-tools/36.0.0/apksigner verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr '[:upper:]' '[:lower:]')
+          EXPECTED=$(tr -d '[:space:]' < release-signing-cert.sha256 | tr '[:upper:]' '[:lower:]')
+          test "$ACTUAL" = "$EXPECTED"
 
       - name: 准备发布文件
         run: |

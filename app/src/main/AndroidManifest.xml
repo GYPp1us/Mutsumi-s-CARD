@@ -1,5 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
+        android:name=".MutsumiCardApplication"
         android:allowBackup="true"
         android:label="记忆卡片"
         android:supportsRtl="true"

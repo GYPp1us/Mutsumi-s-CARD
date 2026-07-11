@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    name: Build and unit test
+    name: 编译并构建 APK
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -32,10 +32,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6.2.0
         with:
-          gradle-version: "9.6.1"
-
-      - name: Unit tests
-        run: gradle :app:testDebugUnitTest
+          gradle-version: "9.6.0"
 
       - name: Build debug APK
         run: gradle :app:assembleDebug

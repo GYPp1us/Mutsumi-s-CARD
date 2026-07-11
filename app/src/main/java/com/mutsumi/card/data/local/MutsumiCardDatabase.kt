@@ -6,7 +6,12 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 
 @Database(
-    entities = [DeckEntity::class, CardEntity::class, ReviewStateEntity::class],
+    entities = [
+        DeckEntity::class,
+        CardEntity::class,
+        ReviewStateEntity::class,
+        PendingImageDeletionEntity::class,
+    ],
     version = 1,
     exportSchema = true,
 )

@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 1,
-    "identityHash": "769354300d1fce1d250b106fbb7ecbf0",
+    "identityHash": "934a5027a12c2cd5738635383efd3e02",
     "entities": [
       {
         "tableName": "decks",
@@ -183,11 +183,35 @@
             ]
           }
         ]
+      },
+      {
+        "tableName": "pending_image_deletions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`path` TEXT NOT NULL, `queuedAt` INTEGER NOT NULL, PRIMARY KEY(`path`))",
+        "fields": [
+          {
+            "fieldPath": "path",
+            "columnName": "path",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "queuedAt",
+            "columnName": "queuedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "path"
+          ]
+        }
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '769354300d1fce1d250b106fbb7ecbf0')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '934a5027a12c2cd5738635383efd3e02')"
     ]
   }
 }

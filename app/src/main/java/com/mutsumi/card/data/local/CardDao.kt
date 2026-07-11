@@ -3,6 +3,7 @@ package com.mutsumi.card.data.local
 import androidx.room.Dao
 import androidx.room.Delete
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Update
@@ -20,6 +21,11 @@ abstract class CardDao {
 
     @Insert
     protected abstract suspend fun insertReviewState(reviewState: ReviewStateEntity)
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    protected abstract suspend fun insertPendingImageDeletion(
+        deletion: PendingImageDeletionEntity,
+    ): Long
 
     @Update
     protected abstract suspend fun updateDeckRow(deck: DeckEntity): Int
@@ -39,9 +45,33 @@ abstract class CardDao {
     @Query("SELECT * FROM decks ORDER BY createdAt ASC, id ASC")
     abstract fun observeDecks(): Flow<List<DeckEntity>>
 
+    @Query(
+        """
+        SELECT decks.*, COUNT(cards.id) AS cardCount
+        FROM decks
+        LEFT JOIN cards ON cards.deckId = decks.id AND cards.archived = 0
+        GROUP BY decks.id
+        ORDER BY decks.createdAt ASC, decks.id ASC
+        """,
+    )
+    abstract fun observeDecksWithCardCount(): Flow<List<DeckWithCardCount>>
+
     @Transaction
     @Query("SELECT * FROM cards WHERE deckId = :deckId AND archived = 0 ORDER BY updatedAt DESC, id DESC")
     abstract fun observeActiveCardsWithReview(deckId: Long): Flow<List<CardWithReviewState>>
+
+    @Transaction
+    @Query(
+        """
+        SELECT * FROM cards
+        WHERE deckId = :deckId AND archived = 0 AND instr(keyText, :query) > 0
+        ORDER BY updatedAt DESC, id DESC
+        """,
+    )
+    abstract fun observeActiveCardsWithReview(
+        deckId: Long,
+        query: String,
+    ): Flow<List<CardWithReviewState>>
 
     @Query("SELECT * FROM cards WHERE archived = 0 AND instr(keyText, :key) > 0 ORDER BY updatedAt DESC, id DESC")
     abstract suspend fun findActiveCardsByKey(key: String): List<CardEntity>
@@ -54,6 +84,12 @@ abstract class CardDao {
 
     @Query("SELECT * FROM review_states WHERE cardId = :cardId")
     abstract suspend fun getReviewState(cardId: Long): ReviewStateEntity?
+
+    @Query("SELECT * FROM pending_image_deletions ORDER BY queuedAt ASC, path ASC")
+    abstract suspend fun getPendingImageDeletions(): List<PendingImageDeletionEntity>
+
+    @Query("DELETE FROM pending_image_deletions WHERE path = :path")
+    abstract suspend fun removePendingImageDeletion(path: String): Int
 
     @Query("SELECT * FROM decks ORDER BY createdAt ASC, id ASC LIMIT 1")
     protected abstract suspend fun findEarliestDeck(): DeckEntity?
@@ -76,6 +112,16 @@ abstract class CardDao {
     }
 
     @Transaction
+    open suspend fun updateCardAndQueueImageDeletion(
+        card: CardEntity,
+        oldImagePath: String,
+        queuedAt: Long,
+    ) {
+        check(updateCardRow(card) == 1) { "卡片 ${card.id} 不存在，无法更新" }
+        insertPendingImageDeletion(PendingImageDeletionEntity(oldImagePath, queuedAt))
+    }
+
+    @Transaction
     open suspend fun deleteDeck(deck: DeckEntity) {
         check(deleteDeckRow(deck) == 1) { "卡组 ${deck.id} 不存在，无法删除" }
     }
@@ -83,6 +129,12 @@ abstract class CardDao {
     @Transaction
     open suspend fun deleteCard(card: CardEntity) {
         check(deleteCardRow(card) == 1) { "卡片 ${card.id} 不存在，无法删除" }
+    }
+
+    @Transaction
+    open suspend fun deleteCardAndQueueImageDeletion(card: CardEntity, queuedAt: Long) {
+        check(deleteCardRow(card) == 1) { "卡片 ${card.id} 不存在，无法删除" }
+        insertPendingImageDeletion(PendingImageDeletionEntity(card.valueImagePath, queuedAt))
     }
 
     @Transaction

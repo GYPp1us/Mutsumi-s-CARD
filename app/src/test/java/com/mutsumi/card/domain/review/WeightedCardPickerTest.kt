@@ -22,6 +22,21 @@ class WeightedCardPickerTest {
     }
 
     @Test
+    fun excludesRecentCardsWhenExactlyOneAlternativeExists() {
+        val picked = WeightedCardPicker(Random(0)).pick(
+            cards = listOf(
+                WeightedReviewCard(1, 100.0),
+                WeightedReviewCard(2, 100.0),
+                WeightedReviewCard(3, 100.0),
+                WeightedReviewCard(4, 1.0),
+            ),
+            recentCardIds = listOf(1, 2, 3),
+        )
+
+        assertThat(picked?.cardId).isEqualTo(4L)
+    }
+
+    @Test
     fun allowsRecentCardsWhenDeckIsSmall() {
         val picker = WeightedCardPicker(Random(0))
         val picked = picker.pick(
@@ -36,4 +51,3 @@ class WeightedCardPickerTest {
         assertThat(WeightedCardPicker(Random(0)).pick(emptyList(), emptyList())).isNull()
     }
 }
-

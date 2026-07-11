@@ -8,11 +8,7 @@ class WeightedCardPicker(
     fun pick(cards: List<WeightedReviewCard>, recentCardIds: List<Long>): WeightedReviewCard? {
         if (cards.isEmpty()) return null
         val recent = recentCardIds.takeLast(3).toSet()
-        val candidates = if (cards.size > recent.size + 1) {
-            cards.filterNot { it.cardId in recent }
-        } else {
-            cards
-        }
+        val candidates = cards.filterNot { it.cardId in recent }.ifEmpty { cards }
         val total = candidates.sumOf { it.weight.coerceAtLeast(0.01) }
         var cursor = random.nextDouble(total)
         for (candidate in candidates) {
@@ -22,4 +18,3 @@ class WeightedCardPicker(
         return candidates.last()
     }
 }
-

@@ -58,8 +58,19 @@ data class ReviewStateEntity(
     val lastReviewedAt: Long? = null,
 )
 
+@Entity(tableName = "pending_image_deletions")
+data class PendingImageDeletionEntity(
+    @PrimaryKey val path: String,
+    val queuedAt: Long,
+)
+
 data class CardWithReviewState(
     @Embedded val card: CardEntity,
     @Relation(parentColumn = "id", entityColumn = "cardId")
     val reviewState: ReviewStateEntity,
+)
+
+data class DeckWithCardCount(
+    @Embedded val deck: DeckEntity,
+    val cardCount: Int,
 )

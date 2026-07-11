@@ -37,6 +37,7 @@
 - 开发阶段未知异常必须抛出，禁止空 `catch` 和静默失败。
 - 保存、导入、导出、清空、归档、删除必须有明确反馈。
 - Release 必须保持 applicationId `com.mutsumi.card`，并使用与历史 Release 相同的签名证书以支持覆盖安装。
+- 历史 `v0.3.6` Release APK 的 signer SHA-256 为 `970be097332d65f5c7cab0cd867790f3d135ba0c03306e91d000cee7f1482481`；机器可读值位于 `release-signing-cert.sha256`。
 
 ## 架构边界
 

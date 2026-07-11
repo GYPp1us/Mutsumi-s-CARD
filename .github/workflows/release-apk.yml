@@ -37,7 +37,7 @@ jobs:
       - name: 设置 Gradle
         uses: gradle/actions/setup-gradle@v6.2.0
         with:
-          gradle-version: "9.6.1"
+          gradle-version: "9.6.0"
 
       - name: 写入 release 签名文件
         env:

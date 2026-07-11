@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
@@ -31,7 +30,6 @@ fun CardsScreen(
     selectedCardId: Long?,
     imageRoot: File,
     onSelectCard: (MemoryCard) -> Unit,
-    onAddSampleCard: () -> Unit,
 ) {
     val selected = cards.firstOrNull { it.id == selectedCardId }
 
@@ -40,9 +38,6 @@ fun CardsScreen(
             Column {
                 Text(text = "默认卡组", style = MaterialTheme.typography.titleLarge)
                 Text(text = "共 ${cards.size} 张卡片", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Button(onClick = onAddSampleCard) {
-                Text("新增示例")
             }
         }
         Spacer(modifier = Modifier.height(12.dp))
@@ -55,7 +50,7 @@ fun CardsScreen(
                     CardValueImage(
                         card = it,
                         imageRoot = imageRoot,
-                        modifier = Modifier.fillMaxWidth().aspectRatio(2f),
+                        modifier = Modifier.fillMaxWidth().aspectRatio(0.5f),
                     )
                 }
             }

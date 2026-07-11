@@ -154,7 +154,7 @@ fun StudyScreen(
                     },
                     policy = policy,
                     committedSide = committedSide,
-                    modifier = Modifier.fillMaxWidth(0.98f).aspectRatio(2f),
+                    modifier = Modifier.fillMaxWidth(0.98f).aspectRatio(0.5f),
                 )
             }
         }

@@ -136,8 +136,8 @@ fun DrawScreen(
             step = DrawStep.Key
             return
         }
-        if (strokes.isEmpty()) {
-            status = "请先绘制图片 value。"
+        if (strokes.isEmpty() && baseBitmap == null) {
+            status = "请先绘制或插入图片 value。"
             step = DrawStep.Canvas
             return
         }
@@ -230,7 +230,7 @@ fun DrawScreen(
                         baseBitmap = baseBitmap,
                         onCameraChange = { camera = it.clamp() },
                         onSizeChange = { viewportSize = it },
-                        modifier = Modifier.fillMaxWidth().weight(1f).aspectRatio(CardCanvasSpec.aspectRatio),
+                    modifier = Modifier.fillMaxWidth().weight(1f).aspectRatio(0.5f),
                     )
                     BottomActions(
                         onUndo = { if (strokes.isNotEmpty()) strokes.removeAt(strokes.lastIndex) },

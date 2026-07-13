@@ -72,25 +72,26 @@ fun MutsumiCardApp(appContainer: AppContainer) {
     BoxWithConstraints {
         val mode = AdaptiveLayoutPolicy.mode(maxWidth.value.toInt(), maxHeight.value.toInt())
         val callbacks = cardsViewModel.callbacks()
+        val contextContent: (@Composable () -> Unit)? = if (selected == AppDestination.Cards) {
+            {
+                CardsContextPane(
+                    card = cardsState.selectedCard,
+                    imageContent = { card, modifier -> StoredCardValueImage(card, appContainer.imageStore, modifier) },
+                    keySaveRevision = cardsState.keySaveRevision,
+                    isBusy = cardsState.isBusy,
+                    compactHeight = maxHeight <= 420.dp,
+                    onSaveKey = callbacks.onSaveKey,
+                    onRedraw = callbacks.onRedraw,
+                    onArchive = callbacks.onArchive,
+                    onDelete = callbacks.onDelete,
+                    modifier = Modifier,
+                )
+            }
+        } else null
         AdaptiveScaffold(
             selected = selected,
             onSelect = { selectedName = it.name },
-            contextContent = {
-                if (selected == AppDestination.Cards) {
-                    CardsContextPane(
-                        card = cardsState.selectedCard,
-                        imageContent = { card, modifier -> StoredCardValueImage(card, appContainer.imageStore, modifier) },
-                        keySaveRevision = cardsState.keySaveRevision,
-                        isBusy = cardsState.isBusy,
-                        compactHeight = maxHeight <= 420.dp,
-                        onSaveKey = callbacks.onSaveKey,
-                        onRedraw = callbacks.onRedraw,
-                        onArchive = callbacks.onArchive,
-                        onDelete = callbacks.onDelete,
-                        modifier = Modifier,
-                    )
-                } else Text(selected.label)
-            },
+            contextContent = contextContent,
             onOpenSettings = { scope.launch { feedback.show("设置将在后续版本提供") } },
             snackbarHost = { FeedbackHost(feedback) },
         ) {

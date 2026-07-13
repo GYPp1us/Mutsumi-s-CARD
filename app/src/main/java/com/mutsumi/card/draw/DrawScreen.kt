@@ -63,7 +63,6 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
@@ -198,10 +197,12 @@ fun DrawScreen(
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val landscape = maxWidth > maxHeight
         if (landscape) {
-            Row(modifier = Modifier.fillMaxSize().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 LandscapeTools(
                     keyText = keyText,
-                    status = status,
                     penColor = penColor,
                     penWidth = penWidth,
                     editMode = editMode,
@@ -213,7 +214,7 @@ fun DrawScreen(
                     onUndo = { if (strokes.isNotEmpty()) strokes.removeAt(strokes.lastIndex) },
                     onClear = ::clearCanvas,
                     onSave = ::save,
-                    modifier = Modifier.width(260.dp).fillMaxHeight(),
+                    modifier = Modifier.width(208.dp).fillMaxHeight(),
                 )
                 CardCanvasFrame(Modifier.weight(1f).fillMaxHeight()) { canvasModifier ->
                     DrawingCanvas(
@@ -333,7 +334,6 @@ private fun CardCanvasFrame(
 @Composable
 private fun LandscapeTools(
     keyText: String,
-    status: String,
     penColor: Color,
     penWidth: Float,
     editMode: EditMode,
@@ -347,20 +347,31 @@ private fun LandscapeTools(
     onSave: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("录入", style = MaterialTheme.typography.titleMedium)
-            Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            OutlinedTextField(value = keyText, onValueChange = onKeyChange, label = { Text("文字 key") })
-            ModeChips(editMode = editMode, onEditModeChange = onEditModeChange)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                ColorChoices(penColor = penColor, onPenColorChange = onPenColorChange, modifier = Modifier.weight(1f))
-                VerticalBrushSlider(penWidth = penWidth, onPenWidthChange = onPenWidthChange)
-            }
-            OutlinedButton(onClick = onInsertBase, modifier = Modifier.fillMaxWidth()) {
-                Text("插入底图")
-            }
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        OutlinedTextField(
+            value = keyText,
+            onValueChange = onKeyChange,
+            label = { Text("文字 key") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        ModeChips(editMode = editMode, onEditModeChange = onEditModeChange)
+        ColorChoices(
+            penColor = penColor,
+            onPenColorChange = onPenColorChange,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text("笔刷 ${penWidth.toInt()}", style = MaterialTheme.typography.labelSmall)
+        Slider(
+            value = penWidth,
+            onValueChange = onPenWidthChange,
+            valueRange = 2f..24f,
+            modifier = Modifier.fillMaxWidth().height(28.dp),
+        )
+        OutlinedButton(onClick = onInsertBase, modifier = Modifier.fillMaxWidth()) {
+            Text("插入底图")
         }
+        Spacer(Modifier.weight(1f))
         BottomActions(onUndo = onUndo, onClear = onClear, onSave = onSave)
     }
 }
@@ -433,22 +444,6 @@ private fun ColorChoices(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun VerticalBrushSlider(
-    penWidth: Float,
-    onPenWidthChange: (Float) -> Unit,
-) {
-    Box(modifier = Modifier.width(54.dp).height(170.dp), contentAlignment = Alignment.Center) {
-        Slider(
-            value = penWidth,
-            onValueChange = onPenWidthChange,
-            valueRange = 2f..24f,
-            modifier = Modifier.width(160.dp).graphicsLayer { rotationZ = -90f },
-        )
-        Text(penWidth.toInt().toString(), style = MaterialTheme.typography.labelMedium)
     }
 }
 

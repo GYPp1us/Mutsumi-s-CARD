@@ -66,7 +66,6 @@ fun AdaptiveScaffold(
             val heightDp = maxHeight.value.roundToInt()
             when (AdaptiveLayoutPolicy.mode(widthDp, heightDp)) {
                 AppLayoutMode.LandscapeThreePane -> ThreePaneShell(
-                    widthDp = widthDp,
                     selected = selected,
                     onSelect = onSelect,
                     onOpenSettings = onOpenSettings,
@@ -84,7 +83,6 @@ fun AdaptiveScaffold(
 
 @Composable
 private fun ThreePaneShell(
-    widthDp: Int,
     selected: AppDestination,
     onSelect: (AppDestination) -> Unit,
     onOpenSettings: () -> Unit,
@@ -94,20 +92,22 @@ private fun ThreePaneShell(
     Row(Modifier.fillMaxSize()) {
         NavigationRail(selected, onSelect, onOpenSettings)
         Box(Modifier.weight(1f).fillMaxSize().testTag("main-workspace")) { content() }
-        Column(
-            Modifier
-                .width(AdaptiveLayoutPolicy.contextWidthDp(widthDp).dp)
-                .fillMaxSize()
-                .border(width = 1.dp, color = Divider)
-                .background(Surface)
-                .testTag("context-pane"),
-        ) {
-            Text(
-                text = "上下文 · ${selected.label}",
-                modifier = Modifier.height(56.dp).padding(horizontal = 16.dp, vertical = 18.dp),
-                fontWeight = FontWeight.SemiBold,
-            )
-            Box(Modifier.weight(1f).padding(16.dp)) { contextContent?.invoke() }
+        if (contextContent != null) {
+            Column(
+                Modifier
+                    .weight(1f)
+                    .fillMaxSize()
+                    .border(width = 1.dp, color = Divider)
+                    .background(Surface)
+                    .testTag("context-pane"),
+            ) {
+                Text(
+                    text = "上下文 · ${selected.label}",
+                    modifier = Modifier.height(56.dp).padding(horizontal = 16.dp, vertical = 18.dp),
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Box(Modifier.weight(1f).padding(16.dp)) { contextContent() }
+            }
         }
     }
 }

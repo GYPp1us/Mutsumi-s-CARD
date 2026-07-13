@@ -33,6 +33,8 @@ import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -41,11 +43,15 @@ import com.mutsumi.card.domain.workflow.MemoryCard
 import com.mutsumi.card.draw.DrawingCanvasSpec
 import com.mutsumi.card.ui.CardValueImage
 import java.io.File
+import kotlinx.coroutines.delay
+import kotlin.math.abs
+import kotlin.math.max
 
 private data class StudyReturnAnimation(
     val start: StudyCardPhysicalState,
     val target: StudyCardPhysicalState,
     val sequence: Int,
+    val feedback: ReviewFeedback? = null,
 )
 
 @Composable
@@ -75,9 +81,17 @@ fun StudyScreen(
     }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val landscape = maxWidth > maxHeight
         val density = LocalDensity.current
+        val context = LocalContext.current
         val screenWidthPx = with(density) { maxWidth.toPx() }
         val screenHeightPx = with(density) { maxHeight.toPx() }
+        val minimumFlingVelocity = max(
+            android.view.ViewConfiguration.get(context).scaledMinimumFlingVelocity.toFloat(),
+            with(density) { 600.dp.toPx() },
+        )
+        val maximumFlingVelocity = android.view.ViewConfiguration.get(context)
+            .scaledMaximumFlingVelocity.toFloat()
         val policy = remember(cardSize, screenWidthPx, screenHeightPx) {
             StudyGesturePolicy(
                 screenWidth = screenWidthPx.coerceAtLeast(1f),
@@ -92,9 +106,22 @@ fun StudyScreen(
         LaunchedEffect(returnAnimation?.sequence) {
             val animation = returnAnimation ?: return@LaunchedEffect
             returnProgress.snapTo(0f)
-            returnProgress.animateTo(1f, animationSpec = tween(durationMillis = 260))
+            returnProgress.animateTo(
+                1f,
+                animationSpec = tween(durationMillis = if (animation.feedback == null) 260 else 220),
+            )
             if (returnAnimation?.sequence == animation.sequence) {
-                returnAnimation = null
+                val feedbackValue = animation.feedback
+                if (feedbackValue == null) {
+                    returnAnimation = null
+                } else {
+                    message = onFeedback(card.id, feedbackValue)
+                    delay(120)
+                    if (returnAnimation?.sequence == animation.sequence) {
+                        returnAnimation = null
+                        committedSide = CardSide.Front
+                    }
+                }
             }
         }
 
@@ -108,11 +135,13 @@ fun StudyScreen(
         val renderedState = activeProjection?.physicalState ?: returnState ?: restingProjection.physicalState
 
         Column(
-            modifier = Modifier.fillMaxSize().padding(16.dp),
+            modifier = Modifier.fillMaxSize().padding(if (landscape) 4.dp else 16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(text = "随机推荐", style = MaterialTheme.typography.titleMedium)
-            Text(text = message, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (!landscape) {
+                Text(text = "随机推荐", style = MaterialTheme.typography.titleMedium)
+                Text(text = message, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             BoxWithConstraints(
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 contentAlignment = Alignment.Center,
@@ -134,12 +163,11 @@ fun StudyScreen(
                         val releaseAction = releaseProjection.releaseAction
                         when (releaseAction) {
                             is StudyReleaseAction.Feedback -> {
-                                message = onFeedback(card.id, releaseAction.feedback)
-                                committedSide = CardSide.Front
                                 returnAnimation = StudyReturnAnimation(
                                     start = releaseProjection.physicalState,
-                                    target = policy.resting(CardSide.Front).physicalState,
+                                    target = policy.exitTarget(releaseProjection, releaseAction.feedback),
                                     sequence = (returnAnimation?.sequence ?: 0) + 1,
+                                    feedback = releaseAction.feedback,
                                 )
                             }
                             StudyReleaseAction.ToggleSide -> {
@@ -166,6 +194,9 @@ fun StudyScreen(
                     },
                     policy = policy,
                     committedSide = committedSide,
+                    minimumFlingVelocity = minimumFlingVelocity,
+                    maximumFlingVelocity = maximumFlingVelocity,
+                    gestureEnabled = returnAnimation?.feedback == null,
                     modifier = Modifier.width(cardWidth).height(cardWidth / DrawingCanvasSpec.aspectRatio),
                 )
             }
@@ -184,11 +215,17 @@ private fun FloatingStudyCard(
     onGestureEnd: (StudyGestureProjection) -> Unit,
     policy: StudyGesturePolicy,
     committedSide: CardSide,
+    minimumFlingVelocity: Float,
+    maximumFlingVelocity: Float,
+    gestureEnabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val pointerModifier = Modifier.pointerInput(card.id, committedSide, policy) {
+    val pointerModifier = if (!gestureEnabled) Modifier else Modifier.pointerInput(card.id, committedSide, policy) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
+            val velocityTracker = VelocityTracker().apply {
+                addPosition(down.uptimeMillis, down.position)
+            }
             val anchor = StudyTouchPoint(down.position.x, down.position.y)
             val interactionStartDirection = committedSide
             var latestProjection = policy.project(
@@ -203,20 +240,42 @@ private fun FloatingStudyCard(
                 val event = awaitPointerEvent()
                 val change = event.changes.firstOrNull { it.id == down.id } ?: event.changes.firstOrNull()
                 if (change == null) {
-                    onGestureEnd(latestProjection)
+                    onGestureEnd(latestProjection.copy(releaseAction = null))
                     break
                 }
                 if (change.changedToUp()) {
-                    onGestureEnd(latestProjection)
-                    change.consume()
-                    break
-                }
-                if (change.pressed) {
+                    velocityTracker.addPosition(change.uptimeMillis, change.position)
                     latestProjection = policy.project(
                         anchor = anchor,
                         current = StudyTouchPoint(change.position.x, change.position.y),
                         committedSide = committedSide,
                         interactionStartDirection = interactionStartDirection,
+                        lockedMode = latestProjection.mode,
+                        lockedAxisRotationZ = latestProjection.lockedAxisRotationZ,
+                    )
+                    val velocity = velocityTracker.calculateVelocity()
+                    onGestureEnd(
+                        latestProjection.copy(
+                            releaseAction = policy.release(
+                                projection = latestProjection,
+                                velocityX = velocity.x.coerceIn(-maximumFlingVelocity, maximumFlingVelocity),
+                                velocityY = velocity.y.coerceIn(-maximumFlingVelocity, maximumFlingVelocity),
+                                minimumFlingVelocity = minimumFlingVelocity,
+                            ),
+                        ),
+                    )
+                    change.consume()
+                    break
+                }
+                if (change.pressed) {
+                    velocityTracker.addPosition(change.uptimeMillis, change.position)
+                    latestProjection = policy.project(
+                        anchor = anchor,
+                        current = StudyTouchPoint(change.position.x, change.position.y),
+                        committedSide = committedSide,
+                        interactionStartDirection = interactionStartDirection,
+                        lockedMode = latestProjection.mode,
+                        lockedAxisRotationZ = latestProjection.lockedAxisRotationZ,
                     )
                     onProjectionChange(latestProjection)
                     change.consume()
@@ -276,7 +335,7 @@ private fun PhysicalStudyCard(
                     modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer {
-                            rotationZ = -angle.axisRotationZ
+                            rotationZ = if (showingBack) angle.axisRotationZ else -angle.axisRotationZ
                             this.shape = shape
                             clip = true
                         }

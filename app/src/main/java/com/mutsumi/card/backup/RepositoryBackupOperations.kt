@@ -14,7 +14,7 @@ class RepositoryBackupOperations(
     private val now: () -> Long = System::currentTimeMillis,
 ) : BackupOperations {
     private val operations = ValidatedBackupOperations(
-        snapshotSource = BackupSnapshotSource { exportData() },
+        snapshotSource = BackupSnapshotSource { loadExportData() },
         service = BackupService(),
         validator = BackupValidator(),
         importer = BackupImporter(ImportGateway { importBatch(it) }),
@@ -25,7 +25,7 @@ class RepositoryBackupOperations(
 
     override suspend fun import(input: java.io.InputStream): ImportSummary = operations.import(input)
 
-    private suspend fun exportData(): BackupExportData {
+    internal suspend fun loadExportData(): BackupExportData {
         val timestamp = now()
         val decks = repository.decks.first()
         val cards = decks.flatMap { repository.cards(it.id).first() }
@@ -47,7 +47,7 @@ class RepositoryBackupOperations(
         )
     }
 
-    private suspend fun importBatch(batch: ImportBatch): ImportSummary {
+    internal suspend fun importBatch(batch: ImportBatch): ImportSummary {
         val deckIds = mutableMapOf<Long, Long>()
         batch.snapshot.decks.forEach { deck -> deckIds[deck.id] = repository.createDeck(deck.name) }
         val cardIds = mutableMapOf<Long, Long>()

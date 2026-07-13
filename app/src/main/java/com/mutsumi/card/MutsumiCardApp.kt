@@ -50,7 +50,13 @@ fun MutsumiCardApp(appContainer: AppContainer) {
         CardsViewModel(appContainer.cardRepository, appContainer.appPreferences, SavedStateHandle())
     }
     val cardsState by cardsViewModel.uiState.collectAsState()
-    val backupViewModel: BackupViewModel = viewModel { BackupViewModel(appContainer.backupOperations) }
+    val backupViewModel: BackupViewModel = viewModel {
+        BackupViewModel(
+            operations = appContainer.backupOperations,
+            cloudOperations = appContainer.cloudBackupOperations,
+            cloudSettings = appContainer.cloudBackupSettings,
+        )
+    }
 
     LaunchedEffect(appContainer) { selectedDeckId = appContainer.ensureSelectedDeck() }
     LaunchedEffect(cardsViewModel) {

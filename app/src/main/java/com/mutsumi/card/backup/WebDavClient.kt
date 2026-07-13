@@ -97,7 +97,7 @@ class WebDavClient(
 
     private fun responseError(action: String, code: Int): CloudBackupException = when (code) {
         401, 403 -> CloudBackupException("WebDAV 认证失败，请检查用户名、密码和目录权限")
-        else -> CloudBackupException("WebDAV $action失败：HTTP $code")
+        else -> CloudBackupException("WebDAV ${action}失败：HTTP $code")
     }
 
     companion object {

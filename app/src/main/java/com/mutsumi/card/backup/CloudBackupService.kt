@@ -23,7 +23,7 @@ class RepositoryCloudBackupOperations(
         val remote = WebDavClient(config, client)
         val index = loadIndex(remote)
         val current = buildCurrentDocument(repositoryOperations.loadExportData())
-        overview(index, current, remote)
+        overview(index, current.document, remote)
     }
 
     override suspend fun backup(config: CloudBackupConfig): CloudBackupResult = withContext(Dispatchers.IO) {

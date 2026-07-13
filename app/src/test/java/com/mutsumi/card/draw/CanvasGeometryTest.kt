@@ -26,11 +26,11 @@ class CanvasGeometryTest {
     }
 
     @Test
-    fun 初始相机精确显示限制方向的百分之三十五() {
+    fun 初始参考区域占视口百分之三十五() {
         val camera = CanvasCamera.initial(viewportWidth = 360f, viewportHeight = 640f)
 
-        assertThat(camera.visibleFraction).isWithin(0.0001f).of(0.35f)
-        assertThat(camera.zoom).isWithin(0.0001f).of(1f / 0.35f)
+        assertThat(camera.visibleFraction).isWithin(0.0001f).of(1f / 0.35f)
+        assertThat(camera.zoom).isWithin(0.0001f).of(0.35f)
     }
 
     @Test
@@ -74,5 +74,16 @@ class CanvasGeometryTest {
         }
 
         assertThat(transformed.centerX).isLessThan(initial.centerX - 20f)
+    }
+
+    @Test
+    fun 相机允许移动到参考区域外且不回弹() {
+        val camera = CanvasCamera.initial(1000f, 1000f).copy(
+            offsetX = 1_000_000f,
+            offsetY = -1_000_000f,
+        ).clamp()
+
+        assertThat(camera.offsetX).isWithin(0.1f).of(1_000_000f)
+        assertThat(camera.offsetY).isWithin(0.1f).of(-1_000_000f)
     }
 }

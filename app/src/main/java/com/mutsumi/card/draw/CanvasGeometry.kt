@@ -5,9 +5,8 @@ import kotlin.math.min
 object DrawingCanvasSpec {
     const val width = 1024
     const val height = 1624
-    const val aspectRatio = 53.98f / 85.60f
+    const val aspectRatio = 1024f / 1624f
     const val initialVisibleFraction = 0.35f
-    const val maximumZoom = 6f
 }
 
 /** 任务 6 重写旧界面前保留的兼容名称。 */
@@ -74,19 +73,8 @@ class CanvasCamera private constructor(
     val offsetX: Float get() = centerX - visibleWidth / 2f
     val offsetY: Float get() = centerY - visibleHeight / 2f
 
-    fun clamp(): CanvasCamera {
-        val clampedZoom = zoom.coerceIn(1f, DrawingCanvasSpec.maximumZoom)
-        val visibleWidth = viewportWidth / (fitScale * clampedZoom)
-        val visibleHeight = viewportHeight / (fitScale * clampedZoom)
-        return CanvasCamera(
-            zoom = clampedZoom,
-            centerX = clampCenter(centerX, visibleWidth, DrawingCanvasSpec.width.toFloat()),
-            centerY = clampCenter(centerY, visibleHeight, DrawingCanvasSpec.height.toFloat()),
-            viewportWidth = viewportWidth,
-            viewportHeight = viewportHeight,
-            normalized = Unit,
-        )
-    }
+    /** 兼容旧调用；无限工作区不对相机做任何钳制。 */
+    fun clamp(): CanvasCamera = this
 
     fun withViewport(width: Float, height: Float): CanvasCamera = CanvasCamera(
         zoom = zoom,
@@ -95,7 +83,7 @@ class CanvasCamera private constructor(
         viewportWidth = width,
         viewportHeight = height,
         normalized = Unit,
-    ).clamp()
+    )
 
     fun withZoom(value: Float): CanvasCamera = CanvasCamera(
         zoom = value,
@@ -104,7 +92,7 @@ class CanvasCamera private constructor(
         viewportWidth = viewportWidth,
         viewportHeight = viewportHeight,
         normalized = Unit,
-    ).clamp()
+    )
 
     /** 以当前帧双指质心为不动点，同时应用平移和缩放。 */
     fun transform(centroidX: Float, centroidY: Float, panX: Float, panY: Float, zoomFactor: Float): CanvasCamera {
@@ -113,7 +101,8 @@ class CanvasCamera private constructor(
         require(zoomFactor.isFinite() && zoomFactor > 0f) { "缩放倍率必须大于 0" }
         val anchorX = offsetX + centroidX / scale
         val anchorY = offsetY + centroidY / scale
-        val nextZoom = (zoom * zoomFactor).coerceIn(1f, DrawingCanvasSpec.maximumZoom)
+        val nextZoom = zoom * zoomFactor
+        require(nextZoom.isFinite() && nextZoom > 0f) { "相机缩放结果无效" }
         val nextScale = fitScale * nextZoom
         return CanvasCamera(
             scale = nextScale,
@@ -121,7 +110,7 @@ class CanvasCamera private constructor(
             offsetY = anchorY - (centroidY + panY) / nextScale,
             viewportWidth = viewportWidth,
             viewportHeight = viewportHeight,
-        ).clamp()
+        )
     }
 
     /** 兼容任务 6 重写前旧画布对绝对 scale/offset 的更新调用。 */
@@ -166,13 +155,13 @@ class CanvasCamera private constructor(
 
     companion object {
         fun initial(viewportWidth: Float, viewportHeight: Float): CanvasCamera = CanvasCamera(
-            zoom = 1f / DrawingCanvasSpec.initialVisibleFraction,
+            zoom = DrawingCanvasSpec.initialVisibleFraction,
             centerX = DrawingCanvasSpec.width / 2f,
             centerY = DrawingCanvasSpec.height / 2f,
             viewportWidth = viewportWidth,
             viewportHeight = viewportHeight,
             normalized = Unit,
-        ).clamp()
+        )
     }
 }
 
@@ -183,13 +172,6 @@ private fun fitScale(viewportWidth: Float, viewportHeight: Float): Float {
         viewportHeight / DrawingCanvasSpec.height,
     )
 }
-
-private fun clampCenter(center: Float, visibleSize: Float, canvasSize: Float): Float =
-    if (visibleSize >= canvasSize) {
-        canvasSize / 2f
-    } else {
-        center.coerceIn(visibleSize / 2f, canvasSize - visibleSize / 2f)
-    }
 
 fun fitCenterRect(
     sourceWidth: Int,

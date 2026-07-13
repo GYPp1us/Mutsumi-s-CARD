@@ -62,7 +62,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
-import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -99,6 +98,7 @@ private class DrawingSessionViewModel : ViewModel() {
     val viewportSize = mutableStateOf(IntSize.Zero)
     val camera = mutableStateOf<CanvasCamera?>(null)
     val baseImageBytes = mutableStateOf<ByteArray?>(null)
+    val baseImageRect = mutableStateOf<CanvasRect?>(null)
 }
 
 @Composable
@@ -118,6 +118,7 @@ fun DrawScreen(
     var viewportSize by session.viewportSize
     var camera by session.camera
     var baseImageBytes by session.baseImageBytes
+    var baseImageRect by session.baseImageRect
     val baseBitmap = remember(baseImageBytes) {
         baseImageBytes?.let { bytes ->
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
@@ -140,9 +141,11 @@ fun DrawScreen(
         if (uri != null) {
             val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                 ?: error("无法读取底图：$uri")
-            checkNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.also(Bitmap::recycle)) {
+            val decoded = checkNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size)) {
                 "底图不是可解码的图片：$uri"
             }
+            baseImageRect = fitImageInVisibleWorld(decoded.width, decoded.height, camera)
+            decoded.recycle()
             baseImageBytes = bytes
             status = "底图已插入：保存时会等比居中放入银行卡比例画布。"
             step = DrawStep.Canvas
@@ -153,6 +156,7 @@ fun DrawScreen(
         strokes.clear()
         currentPoints.clear()
         baseImageBytes = null
+        baseImageRect = null
         camera = viewportSize.takeIf { it.width > 0 && it.height > 0 }?.let {
             CanvasCamera.initial(it.width.toFloat(), it.height.toFloat())
         }
@@ -173,6 +177,8 @@ fun DrawScreen(
         val pngBytes = renderCanvasPng(
             strokes = strokes,
             baseBitmap = baseBitmap,
+            baseImageRect = baseImageRect,
+            camera = requireNotNull(camera) { "画布相机尚未初始化" },
             backgroundColor = Color(0xFFF8FAF9),
         )
         val message = onSaveCard(
@@ -218,6 +224,7 @@ fun DrawScreen(
                         editMode = editMode,
                         camera = camera,
                         baseBitmap = baseBitmap,
+                        baseImageRect = baseImageRect,
                         onCameraChange = { camera = it },
                         onSizeChange = { viewportSize = it },
                         modifier = canvasModifier,
@@ -263,6 +270,7 @@ fun DrawScreen(
                             editMode = editMode,
                             camera = camera,
                             baseBitmap = baseBitmap,
+                            baseImageRect = baseImageRect,
                             onCameraChange = { camera = it },
                             onSizeChange = { viewportSize = it },
                             modifier = canvasModifier,
@@ -472,6 +480,7 @@ private fun DrawingCanvas(
     editMode: EditMode,
     camera: CanvasCamera?,
     baseBitmap: Bitmap?,
+    baseImageRect: CanvasRect?,
     onCameraChange: (CanvasCamera) -> Unit,
     onSizeChange: (IntSize) -> Unit,
     modifier: Modifier = Modifier,
@@ -480,16 +489,15 @@ private fun DrawingCanvas(
     val activeCamera = camera
     val latestCamera by rememberUpdatedState(camera)
     val latestOnCameraChange by rememberUpdatedState(onCameraChange)
+    var activeStrokeWidth by remember { mutableFloatStateOf(penWidth) }
     val pointerModifier = when (editMode) {
         EditMode.Draw -> Modifier.pointerInput(activeCamera, penColor, penWidth) {
             if (activeCamera == null) return@pointerInput
-            fun toModel(position: Offset): Offset = Offset(
-                x = activeCamera.offsetX + position.x / activeCamera.scale,
-                y = activeCamera.offsetY + position.y / activeCamera.scale,
-            )
+            fun toModel(position: Offset): Offset = activeCamera.screenToWorld(position)
             detectDragGestures(
                 onDragStart = {
                     currentPoints.clear()
+                    activeStrokeWidth = penWidth / activeCamera.scale
                     currentPoints += StrokePoint(toModel(it))
                 },
                 onDrag = { change, _ ->
@@ -500,7 +508,7 @@ private fun DrawingCanvas(
                 },
                 onDragEnd = {
                     if (currentPoints.size >= 2) {
-                        strokes += DrawingStroke(currentPoints.toList(), penColor, penWidth)
+                        strokes += DrawingStroke(currentPoints.toList(), penColor, activeStrokeWidth)
                     }
                     currentPoints.clear()
                 },
@@ -544,38 +552,23 @@ private fun DrawingCanvas(
             .then(pointerModifier),
     ) {
         clipRect {
-            drawRect(Color(0xFFF8FAF9), size = size)
+            drawRect(Color.White, size = size)
             if (activeCamera != null) {
-                withTransform({
-                    scale(activeCamera.scale, activeCamera.scale)
-                    translate(-activeCamera.offsetX, -activeCamera.offsetY)
-                }) {
-                    drawLogicalCanvasBackground()
-                    drawBaseImage(baseBitmap)
-                    strokes.forEach(::drawStroke)
-                    drawStroke(DrawingStroke(currentPoints.toList(), penColor, penWidth))
-                }
+                drawBaseImage(baseBitmap, baseImageRect, activeCamera)
+                strokes.forEach { drawStroke(it, activeCamera) }
+                drawStroke(DrawingStroke(currentPoints.toList(), penColor, activeStrokeWidth), activeCamera)
             }
         }
     }
 }
 
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawLogicalCanvasBackground() {
-    drawRect(
-        color = Color(0xFFFFFFFF),
-        topLeft = Offset.Zero,
-        size = androidx.compose.ui.geometry.Size(CardCanvasSpec.logicalWidth, CardCanvasSpec.logicalHeight),
-    )
-}
-
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawBaseImage(baseBitmap: Bitmap?) {
-    baseBitmap ?: return
-    val rect = fitCenterRect(
-        sourceWidth = baseBitmap.width,
-        sourceHeight = baseBitmap.height,
-        targetWidth = CardCanvasSpec.exportWidth,
-        targetHeight = CardCanvasSpec.exportHeight,
-    )
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawBaseImage(
+    baseBitmap: Bitmap?,
+    worldRect: CanvasRect?,
+    camera: CanvasCamera,
+) {
+    if (baseBitmap == null || worldRect == null) return
+    val rect = camera.worldToScreen(worldRect)
     drawImage(
         image = baseBitmap.asImageBitmap(),
         dstOffset = IntOffset(rect.left.toInt(), rect.top.toInt()),
@@ -583,18 +576,56 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawBaseImage(baseB
     )
 }
 
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawStroke(stroke: DrawingStroke) {
+private fun CanvasCamera.screenToWorld(point: Offset): Offset = Offset(
+    x = centerX + (point.x - viewportWidth / 2f) / scale,
+    y = centerY + (point.y - viewportHeight / 2f) / scale,
+)
+
+private fun CanvasCamera.worldToScreen(point: Offset): Offset = Offset(
+    x = viewportWidth / 2f + (point.x - centerX) * scale,
+    y = viewportHeight / 2f + (point.y - centerY) * scale,
+)
+
+private fun CanvasCamera.worldToScreen(rect: CanvasRect): CanvasRect {
+    val topLeft = worldToScreen(Offset(rect.left, rect.top))
+    return CanvasRect(topLeft.x, topLeft.y, rect.width * scale, rect.height * scale)
+}
+
+private fun fitImageInVisibleWorld(
+    imageWidth: Int,
+    imageHeight: Int,
+    camera: CanvasCamera?,
+): CanvasRect {
+    require(imageWidth > 0 && imageHeight > 0) { "底图尺寸必须大于 0" }
+    val centerX = camera?.centerX ?: DrawingCanvasSpec.width / 2f
+    val centerY = camera?.centerY ?: DrawingCanvasSpec.height / 2f
+    val availableWidth = (camera?.visibleWidth ?: DrawingCanvasSpec.width.toFloat()) * 0.9f
+    val availableHeight = (camera?.visibleHeight ?: DrawingCanvasSpec.height.toFloat()) * 0.9f
+    val scale = kotlin.math.min(availableWidth / imageWidth, availableHeight / imageHeight)
+    val width = imageWidth * scale
+    val height = imageHeight * scale
+    return CanvasRect(centerX - width / 2f, centerY - height / 2f, width, height)
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawStroke(
+    stroke: DrawingStroke,
+    camera: CanvasCamera,
+) {
     if (stroke.points.size < 2) return
     val path = Path().apply {
-        moveTo(stroke.points.first().position.x, stroke.points.first().position.y)
-        stroke.points.drop(1).forEach { lineTo(it.position.x, it.position.y) }
+        camera.worldToScreen(stroke.points.first().position).let { moveTo(it.x, it.y) }
+        stroke.points.drop(1).forEach { point ->
+            camera.worldToScreen(point.position).let { lineTo(it.x, it.y) }
+        }
     }
-    drawPath(path, stroke.color, style = Stroke(width = stroke.width, cap = StrokeCap.Round))
+    drawPath(path, stroke.color, style = Stroke(width = stroke.width * camera.scale, cap = StrokeCap.Round))
 }
 
 private fun renderCanvasPng(
     strokes: List<DrawingStroke>,
     baseBitmap: Bitmap?,
+    baseImageRect: CanvasRect?,
+    camera: CanvasCamera,
     backgroundColor: Color,
 ): ByteArray {
     require(strokes.isNotEmpty() || baseBitmap != null) { "图片 value 需要笔迹或底图" }
@@ -602,10 +633,18 @@ private fun renderCanvasPng(
     val bitmap = Bitmap.createBitmap(CardCanvasSpec.exportWidth, CardCanvasSpec.exportHeight, Bitmap.Config.ARGB_8888)
     val canvas = AndroidCanvas(bitmap)
     canvas.drawColor(backgroundColor.toArgb())
-    baseBitmap?.let {
-        val rect = fitCenterRect(it.width, it.height, CardCanvasSpec.exportWidth, CardCanvasSpec.exportHeight)
+    val exportScale = CardCanvasSpec.exportWidth / camera.visibleWidth
+    val exportCamera = CanvasCamera(
+        scale = exportScale,
+        offsetX = camera.offsetX,
+        offsetY = camera.offsetY,
+        viewportWidth = CardCanvasSpec.exportWidth.toFloat(),
+        viewportHeight = CardCanvasSpec.exportHeight.toFloat(),
+    )
+    if (baseBitmap != null && baseImageRect != null) {
+        val rect = exportCamera.worldToScreen(baseImageRect)
         canvas.drawBitmap(
-            it,
+            baseBitmap,
             null,
             RectF(rect.left, rect.top, rect.left + rect.width, rect.top + rect.height),
             Paint(Paint.ANTI_ALIAS_FLAG),
@@ -614,15 +653,17 @@ private fun renderCanvasPng(
     strokes.forEach { stroke ->
         if (stroke.points.size >= 2) {
             val path = AndroidPath().apply {
-                moveTo(stroke.points.first().position.x, stroke.points.first().position.y)
-                stroke.points.drop(1).forEach { lineTo(it.position.x, it.position.y) }
+                exportCamera.worldToScreen(stroke.points.first().position).let { moveTo(it.x, it.y) }
+                stroke.points.drop(1).forEach { point ->
+                    exportCamera.worldToScreen(point.position).let { lineTo(it.x, it.y) }
+                }
             }
             val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = stroke.color.toArgb()
                 style = Paint.Style.STROKE
                 strokeCap = Paint.Cap.ROUND
                 strokeJoin = Paint.Join.ROUND
-                strokeWidth = stroke.width
+                strokeWidth = stroke.width * exportCamera.scale
             }
             canvas.drawPath(path, paint)
         }

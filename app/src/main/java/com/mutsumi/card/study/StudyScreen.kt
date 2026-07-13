@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -52,6 +53,8 @@ private data class StudyReturnAnimation(
     val target: StudyCardPhysicalState,
     val sequence: Int,
     val feedback: ReviewFeedback? = null,
+    val useInertialSpring: Boolean = false,
+    val initialProgressVelocity: Float = 0f,
 )
 
 @Composable
@@ -90,6 +93,10 @@ fun StudyScreen(
             android.view.ViewConfiguration.get(context).scaledMinimumFlingVelocity.toFloat(),
             with(density) { 600.dp.toPx() },
         )
+        val minimumHorizontalFlingVelocity = max(
+            android.view.ViewConfiguration.get(context).scaledMinimumFlingVelocity.toFloat(),
+            with(density) { 700.dp.toPx() },
+        )
         val maximumFlingVelocity = android.view.ViewConfiguration.get(context)
             .scaledMaximumFlingVelocity.toFloat()
         val policy = remember(cardSize, screenWidthPx, screenHeightPx) {
@@ -107,8 +114,13 @@ fun StudyScreen(
             val animation = returnAnimation ?: return@LaunchedEffect
             returnProgress.snapTo(0f)
             returnProgress.animateTo(
-                1f,
-                animationSpec = tween(durationMillis = if (animation.feedback == null) 260 else 220),
+                targetValue = 1f,
+                animationSpec = if (animation.useInertialSpring) {
+                    spring(dampingRatio = 0.82f, stiffness = 420f)
+                } else {
+                    tween(durationMillis = if (animation.feedback == null) 260 else 220)
+                },
+                initialVelocity = animation.initialProgressVelocity,
             )
             if (returnAnimation?.sequence == animation.sequence) {
                 val feedbackValue = animation.feedback
@@ -180,6 +192,10 @@ fun StudyScreen(
                                     start = releaseProjection.physicalState,
                                     target = policy.resting(targetSide).physicalState,
                                     sequence = (returnAnimation?.sequence ?: 0) + 1,
+                                    useInertialSpring = true,
+                                    initialProgressVelocity = policy.horizontalAnimationProgressVelocity(
+                                        releaseProjection,
+                                    ),
                                 )
                             }
                             null -> {
@@ -195,6 +211,7 @@ fun StudyScreen(
                     policy = policy,
                     committedSide = committedSide,
                     minimumFlingVelocity = minimumFlingVelocity,
+                    minimumHorizontalFlingVelocity = minimumHorizontalFlingVelocity,
                     maximumFlingVelocity = maximumFlingVelocity,
                     gestureEnabled = returnAnimation?.feedback == null,
                     modifier = Modifier.width(cardWidth).height(cardWidth / DrawingCanvasSpec.aspectRatio),
@@ -216,6 +233,7 @@ private fun FloatingStudyCard(
     policy: StudyGesturePolicy,
     committedSide: CardSide,
     minimumFlingVelocity: Float,
+    minimumHorizontalFlingVelocity: Float,
     maximumFlingVelocity: Float,
     gestureEnabled: Boolean,
     modifier: Modifier = Modifier,
@@ -254,13 +272,16 @@ private fun FloatingStudyCard(
                         lockedAxisRotationZ = latestProjection.lockedAxisRotationZ,
                     )
                     val velocity = velocityTracker.calculateVelocity()
+                    val releaseVelocityX = velocity.x.coerceIn(-maximumFlingVelocity, maximumFlingVelocity)
                     onGestureEnd(
                         latestProjection.copy(
+                            releaseVelocityX = releaseVelocityX,
                             releaseAction = policy.release(
                                 projection = latestProjection,
-                                velocityX = velocity.x.coerceIn(-maximumFlingVelocity, maximumFlingVelocity),
+                                velocityX = releaseVelocityX,
                                 velocityY = velocity.y.coerceIn(-maximumFlingVelocity, maximumFlingVelocity),
                                 minimumFlingVelocity = minimumFlingVelocity,
+                                minimumHorizontalFlingVelocity = minimumHorizontalFlingVelocity,
                             ),
                         ),
                     )

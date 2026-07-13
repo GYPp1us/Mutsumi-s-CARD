@@ -29,6 +29,7 @@ data class StudyGestureProjection(
     val lockedAxisRotationZ: Float? = null,
     val dx: Float = 0f,
     val dy: Float = 0f,
+    val releaseVelocityX: Float = 0f,
 )
 
 fun studyCardPhysicsFromDrag(
@@ -58,17 +59,17 @@ fun studyCardPhysicsFromDrag(
         y = dy * centerMotion,
     )
 
+    val interactionAxis = interactionAxisFromDrag(dx, dy, interactionStartDirection)
     if (mode == StudyDragMode.VerticalFeedback) {
         return StudyCardPhysicalState(
             center = center,
             angle = StudyCardAngle(
-                axisRotationZ = lockedAxisRotationZ ?: atan2(dy, dx).toDegrees().normalizeDegrees(),
+                axisRotationZ = lockedAxisRotationZ ?: interactionAxis,
                 deflection = committedSide.applyRelativeDeflection(VERTICAL_FIXED_TILT),
             ),
         )
     }
 
-    val axis = atan2(dy, dx).toDegrees().normalizeDegrees()
     val relativeDeflection = if (mode == StudyDragMode.HorizontalFlip) {
         val progress = ((abs(dx) - radius) / actionBand).coerceIn(0f, 1f)
         INNER_MAX_TILT + (180f - INNER_MAX_TILT) * smoothstep(0f, 1f, progress)
@@ -78,7 +79,7 @@ fun studyCardPhysicsFromDrag(
     return StudyCardPhysicalState(
         center = center,
         angle = StudyCardAngle(
-            axisRotationZ = axis,
+            axisRotationZ = interactionAxis,
             deflection = committedSide.applyRelativeDeflection(relativeDeflection),
         ),
     )
@@ -146,7 +147,7 @@ class StudyGesturePolicy(
         val mode = lockedMode ?: if (distance > radius) classifyMode(dx, dy) else null
         val verticalAxis = lockedAxisRotationZ ?: if (
             mode == StudyDragMode.VerticalFeedback && lockedMode == null
-        ) atan2(dy, dx).toDegrees().normalizeDegrees() else null
+        ) interactionAxisFromDrag(dx, dy, interactionStartDirection) else null
         val flipProgress = horizontalFlipProgress(dx, radius, flipBand)
         return StudyGestureProjection(
             physicalState = studyCardPhysicsFromDrag(
@@ -171,6 +172,7 @@ class StudyGesturePolicy(
         velocityX: Float,
         velocityY: Float,
         minimumFlingVelocity: Float,
+        minimumHorizontalFlingVelocity: Float = minimumFlingVelocity,
     ): StudyReleaseAction? {
         if (projection.mode == StudyDragMode.VerticalFeedback) {
             val effectiveVelocity = if (abs(velocityY) >= minimumFlingVelocity) velocityY else 0f
@@ -179,10 +181,19 @@ class StudyGesturePolicy(
             if (projectedDy >= verticalCommit) return StudyReleaseAction.Feedback(ReviewFeedback.Again)
             return null
         }
-        return if (
-            projection.mode == StudyDragMode.HorizontalFlip &&
-            abs(projection.flipProgress) >= 0.5f
-        ) StudyReleaseAction.ToggleSide else null
+        if (projection.mode != StudyDragMode.HorizontalFlip) return null
+        val effectiveVelocityX = if (abs(velocityX) >= minimumHorizontalFlingVelocity) velocityX else 0f
+        val projectedDx = projection.dx + effectiveVelocityX * HORIZONTAL_VELOCITY_PROJECTION_SECONDS
+        if (projectedDx * projection.dx <= 0f) return null
+        val projectedProgress = horizontalFlipProgress(projectedDx, radius, flipBand)
+        return if (abs(projectedProgress) >= 0.5f) StudyReleaseAction.ToggleSide else null
+    }
+
+    fun horizontalAnimationProgressVelocity(projection: StudyGestureProjection): Float {
+        if (projection.mode != StudyDragMode.HorizontalFlip || projection.dx == 0f) return 0f
+        val velocityTowardTarget = projection.releaseVelocityX * sign(projection.dx)
+        return (velocityTowardTarget.coerceAtLeast(0f) / flipBand)
+            .coerceAtMost(MAX_HORIZONTAL_PROGRESS_VELOCITY)
     }
 
     fun exitTarget(
@@ -203,6 +214,9 @@ fun StudyCardAngle.isStudyCardBackFacing(): Boolean = cos(deflection.toRadians()
 
 private fun classifyMode(dx: Float, dy: Float): StudyDragMode =
     if (abs(dy) >= abs(dx)) StudyDragMode.VerticalFeedback else StudyDragMode.HorizontalFlip
+
+private fun interactionAxisFromDrag(dx: Float, dy: Float, interactionStartDirection: CardSide): Float =
+    (atan2(dy, dx).toDegrees() + interactionStartDirection.axisOffset).normalizeDegrees()
 
 private fun CardSide.applyRelativeDeflection(value: Float): Float = when (this) {
     CardSide.Front -> value.coerceIn(0f, 180f)
@@ -251,7 +265,12 @@ private fun Float.normalizeDegrees(): Float {
 private val CardSide.baseDeflection: Float
     get() = if (this == CardSide.Front) 0f else 180f
 
+private val CardSide.axisOffset: Float
+    get() = if (this == CardSide.Front) 0f else 180f
+
 private const val INNER_MAX_TILT = 8f
 private const val VERTICAL_FIXED_TILT = 7f
 private const val HORIZONTAL_CENTER_RATIO = 0.075f
 private const val VELOCITY_PROJECTION_SECONDS = 0.14f
+private const val HORIZONTAL_VELOCITY_PROJECTION_SECONDS = 0.12f
+private const val MAX_HORIZONTAL_PROGRESS_VELOCITY = 8f

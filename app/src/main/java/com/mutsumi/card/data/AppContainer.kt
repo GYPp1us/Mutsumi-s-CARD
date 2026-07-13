@@ -2,6 +2,10 @@ package com.mutsumi.card.data
 
 import android.content.Context
 import com.mutsumi.card.backup.BackupOperations
+import com.mutsumi.card.backup.CloudBackupOperations
+import com.mutsumi.card.backup.CloudBackupSettings
+import com.mutsumi.card.backup.PrivateCloudBackupSettings
+import com.mutsumi.card.backup.RepositoryCloudBackupOperations
 import com.mutsumi.card.backup.RepositoryBackupOperations
 import com.mutsumi.card.backup.ExportSummary
 import com.mutsumi.card.backup.ImportSummary
@@ -18,6 +22,8 @@ class AppContainer(
     val appPreferences: AppPreferences,
     val imageStore: CardImageStore,
     val backupOperations: BackupOperations = UnavailableBackupOperations,
+    val cloudBackupOperations: CloudBackupOperations? = null,
+    val cloudBackupSettings: CloudBackupSettings? = null,
 ) {
     suspend fun ensureSelectedDeck(): Long {
         cardRepository.retryPendingImageCleanup()
@@ -38,15 +44,21 @@ class AppContainer(
             val database = MutsumiCardDatabase.build(context)
             val imageStore = FileCardImageStore(File(context.filesDir, "card-store-v2"))
             val repository = RoomCardRepository(database.cardDao(), imageStore)
+            val repositoryBackupOperations = RepositoryBackupOperations(
+                repository = repository,
+                imageStore = imageStore,
+                temporaryDirectory = File(context.cacheDir, "backup-v2"),
+            )
             return AppContainer(
                 cardRepository = repository,
                 appPreferences = DataStoreAppPreferences.create(context),
                 imageStore = imageStore,
-                backupOperations = RepositoryBackupOperations(
-                    repository = repository,
-                    imageStore = imageStore,
-                    temporaryDirectory = File(context.cacheDir, "backup-v2"),
+                backupOperations = repositoryBackupOperations,
+                cloudBackupOperations = RepositoryCloudBackupOperations(
+                    repositoryOperations = repositoryBackupOperations,
+                    temporaryDirectory = File(context.cacheDir, "cloud-backup-v1"),
                 ),
+                cloudBackupSettings = PrivateCloudBackupSettings(context),
             )
         }
     }

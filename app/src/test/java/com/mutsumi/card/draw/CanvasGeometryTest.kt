@@ -5,10 +5,10 @@ import org.junit.Test
 
 class CanvasGeometryTest {
     @Test
-    fun 画布固定为竖向1024乘2048() {
+    fun 画布固定为竖向银行卡比例1024乘1624() {
         assertThat(DrawingCanvasSpec.width).isEqualTo(1024)
-        assertThat(DrawingCanvasSpec.height).isEqualTo(2048)
-        assertThat(DrawingCanvasSpec.aspectRatio).isEqualTo(0.5f)
+        assertThat(DrawingCanvasSpec.height).isEqualTo(1624)
+        assertThat(DrawingCanvasSpec.aspectRatio).isWithin(0.0001f).of(53.98f / 85.60f)
     }
 
     @Test
@@ -21,7 +21,7 @@ class CanvasGeometryTest {
         )
 
         assertThat(rect).isEqualTo(
-            CanvasRect(left = 0f, top = 768f, width = 1024f, height = 512f),
+            CanvasRect(left = 0f, top = 556f, width = 1024f, height = 512f),
         )
     }
 
@@ -46,5 +46,33 @@ class CanvasGeometryTest {
         assertThat(restored.scale).isWithin(0.0001f).of(portrait.scale)
         assertThat(restored.centerX).isWithin(0.001f).of(portrait.centerX)
         assertThat(restored.centerY).isWithin(0.001f).of(portrait.centerY)
+    }
+
+    @Test
+    fun 双指缩放以实时质心为锚点() {
+        val camera = CanvasCamera.initial(1000f, 1000f).withZoom(2f)
+        val centroidX = 420f
+        val centroidY = 460f
+        val panX = 18f
+        val panY = -12f
+        val anchorX = camera.offsetX + centroidX / camera.scale
+        val anchorY = camera.offsetY + centroidY / camera.scale
+
+        val transformed = camera.transform(centroidX, centroidY, panX, panY, 1.15f)
+
+        assertThat(transformed.offsetX + (centroidX + panX) / transformed.scale)
+            .isWithin(0.001f).of(anchorX)
+        assertThat(transformed.offsetY + (centroidY + panY) / transformed.scale)
+            .isWithin(0.001f).of(anchorY)
+    }
+
+    @Test
+    fun 连续平移十五帧不会只应用第一帧() {
+        val initial = CanvasCamera.initial(1000f, 1000f).withZoom(2f)
+        val transformed = (1..15).fold(initial) { camera, _ ->
+            camera.transform(500f, 500f, 2f, 0f, 1f)
+        }
+
+        assertThat(transformed.centerX).isLessThan(initial.centerX - 20f)
     }
 }

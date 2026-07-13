@@ -4,8 +4,8 @@ import kotlin.math.min
 
 object DrawingCanvasSpec {
     const val width = 1024
-    const val height = 2048
-    const val aspectRatio = 0.5f
+    const val height = 1624
+    const val aspectRatio = 53.98f / 85.60f
     const val initialVisibleFraction = 0.35f
     const val maximumZoom = 6f
 }
@@ -105,6 +105,24 @@ class CanvasCamera private constructor(
         viewportHeight = viewportHeight,
         normalized = Unit,
     ).clamp()
+
+    /** 以当前帧双指质心为不动点，同时应用平移和缩放。 */
+    fun transform(centroidX: Float, centroidY: Float, panX: Float, panY: Float, zoomFactor: Float): CanvasCamera {
+        require(centroidX.isFinite() && centroidY.isFinite()) { "缩放质心必须是有限数值" }
+        require(panX.isFinite() && panY.isFinite()) { "平移量必须是有限数值" }
+        require(zoomFactor.isFinite() && zoomFactor > 0f) { "缩放倍率必须大于 0" }
+        val anchorX = offsetX + centroidX / scale
+        val anchorY = offsetY + centroidY / scale
+        val nextZoom = (zoom * zoomFactor).coerceIn(1f, DrawingCanvasSpec.maximumZoom)
+        val nextScale = fitScale * nextZoom
+        return CanvasCamera(
+            scale = nextScale,
+            offsetX = anchorX - (centroidX + panX) / nextScale,
+            offsetY = anchorY - (centroidY + panY) / nextScale,
+            viewportWidth = viewportWidth,
+            viewportHeight = viewportHeight,
+        ).clamp()
+    }
 
     /** 兼容任务 6 重写前旧画布对绝对 scale/offset 的更新调用。 */
     fun copy(

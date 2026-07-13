@@ -20,7 +20,7 @@ class DrawingSceneRendererTest {
     private val renderer = DrawingSceneRenderer()
 
     @Test
-    fun 仅底图可以导出为真实1024乘2048的PNG() {
+    fun 仅底图可以导出为真实1024乘1624的PNG() {
         val png = renderer.exportPng(
             DrawingDocument(baseImage = solidPng(width = 8, height = 4, color = Color.RED)),
         )
@@ -29,7 +29,7 @@ class DrawingSceneRendererTest {
         try {
             assertThat(decoded).isNotNull()
             assertThat(decoded.width).isEqualTo(1024)
-            assertThat(decoded.height).isEqualTo(2048)
+            assertThat(decoded.height).isEqualTo(1624)
             assertThat(png.copyOfRange(0, 8)).isEqualTo(PNG_SIGNATURE)
         } finally {
             decoded?.recycle()
@@ -42,8 +42,8 @@ class DrawingSceneRendererTest {
             DrawingDocument(baseImage = solidPng(width = 8, height = 4, color = Color.RED)),
         ) { bitmap ->
             assertThat(bitmap.getPixel(512, 100)).isEqualTo(Color.WHITE)
-            assertThat(bitmap.getPixel(512, 1024)).isEqualTo(Color.RED)
-            assertThat(bitmap.getPixel(512, 1900)).isEqualTo(Color.WHITE)
+            assertThat(bitmap.getPixel(512, 812)).isEqualTo(Color.RED)
+            assertThat(bitmap.getPixel(512, 1500)).isEqualTo(Color.WHITE)
         }
     }
 
@@ -85,11 +85,12 @@ class DrawingSceneRendererTest {
         )
 
         try {
-            assertThat(renderer.sceneRectForViewport(600, 600))
-                .isEqualTo(CanvasRect(left = 150f, top = 0f, width = 300f, height = 600f))
-            assertThat(preview.getPixel(149, 300)).isEqualTo(Color.MAGENTA)
-            assertThat(preview.getPixel(150, 300)).isEqualTo(Color.GREEN)
-            assertThat(preview.getPixel(450, 300)).isEqualTo(Color.MAGENTA)
+            val sceneRect = renderer.sceneRectForViewport(600, 600)
+            assertThat(sceneRect.left).isWithin(0.1f).of(110.8f)
+            assertThat(sceneRect.width).isWithin(0.1f).of(378.3f)
+            assertThat(preview.getPixel(110, 370)).isEqualTo(Color.MAGENTA)
+            assertThat(preview.getPixel(111, 370)).isEqualTo(Color.GREEN)
+            assertThat(preview.getPixel(489, 370)).isEqualTo(Color.MAGENTA)
         } finally {
             preview.recycle()
         }
@@ -120,9 +121,9 @@ class DrawingSceneRendererTest {
             workspaceColorArgb = Color.MAGENTA,
         )
         try {
-            assertThat(preview.getPixel(149, 300)).isEqualTo(Color.MAGENTA)
-            assertThat(preview.getPixel(150, 300)).isEqualTo(Color.WHITE)
-            assertThat(preview.getPixel(151, 300)).isEqualTo(Color.WHITE)
+            assertThat(preview.getPixel(110, 370)).isEqualTo(Color.MAGENTA)
+            assertThat(preview.getPixel(111, 370)).isEqualTo(Color.WHITE)
+            assertThat(preview.getPixel(112, 370)).isEqualTo(Color.WHITE)
         } finally {
             preview.recycle()
         }
@@ -150,19 +151,19 @@ class DrawingSceneRendererTest {
         val cachedRenderer = DrawingSceneRenderer(decoder)
         val document = DrawingDocument(baseImage = byteArrayOf(1, 2, 3))
         val scene = cachedRenderer.prepareScene(document)
-        val first = Bitmap.createBitmap(1024, 2048, Bitmap.Config.ARGB_8888)
-        val second = Bitmap.createBitmap(1024, 2048, Bitmap.Config.ARGB_8888)
+        val first = Bitmap.createBitmap(1024, 1624, Bitmap.Config.ARGB_8888)
+        val second = Bitmap.createBitmap(1024, 1624, Bitmap.Config.ARGB_8888)
         try {
             cachedRenderer.drawScene(
                 Canvas(first),
                 document,
-                CanvasRect(0f, 0f, 1024f, 2048f),
+                CanvasRect(0f, 0f, 1024f, 1624f),
                 scene,
             )
             cachedRenderer.drawScene(
                 Canvas(second),
                 document,
-                CanvasRect(0f, 0f, 1024f, 2048f),
+                CanvasRect(0f, 0f, 1024f, 1624f),
                 scene,
             )
 

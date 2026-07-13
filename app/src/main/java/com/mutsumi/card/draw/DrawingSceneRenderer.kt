@@ -112,7 +112,12 @@ class DrawingSceneRenderer(
             drawScene(
                 canvas = Canvas(output),
                 document = document,
-                destination = CanvasRect(0f, 0f, 1024f, 2048f),
+                destination = CanvasRect(
+                    0f,
+                    0f,
+                    DrawingCanvasSpec.width.toFloat(),
+                    DrawingCanvasSpec.height.toFloat(),
+                ),
                 scene = scene,
             )
             return block(output)

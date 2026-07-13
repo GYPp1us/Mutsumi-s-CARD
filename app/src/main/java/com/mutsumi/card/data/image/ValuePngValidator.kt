@@ -26,12 +26,12 @@ class ValuePngValidator(
             "图片 value 必须是有效 PNG"
         }
         val parsed = parseChunks(bytes)
-        require(parsed.width == WIDTH && parsed.height == HEIGHT) {
-            "图片 value 必须为竖向 1024×2048 PNG"
+        require(parsed.width == WIDTH && parsed.height in ACCEPTED_HEIGHTS) {
+            "图片 value 必须为竖向 1024×1624 PNG（兼容旧版 1024×2048）"
         }
         validatePixels(parsed)
         val decodedSize = decoder.decodeSize(bytes)
-        require(decodedSize == WIDTH to HEIGHT) { "图片 value 的 PNG 数据无法由系统解码" }
+        require(decodedSize == parsed.width to parsed.height) { "图片 value 的 PNG 数据无法由系统解码" }
     }
 
     private fun parseChunks(bytes: ByteArray): ParsedPng {
@@ -143,12 +143,14 @@ class ValuePngValidator(
 
     private companion object {
         const val WIDTH = 1024
-        const val HEIGHT = 2048
+        const val HEIGHT = 1624
+        const val LEGACY_HEIGHT = 2048
         const val COLOR_TYPE_RGB = 2
         const val COLOR_TYPE_RGBA = 6
         const val CHUNK_OVERHEAD = 12
         const val MINIMUM_PNG_SIZE = 8 + CHUNK_OVERHEAD * 3 + 13
         val SUPPORTED_COLOR_TYPES = setOf(COLOR_TYPE_RGB, COLOR_TYPE_RGBA)
+        val ACCEPTED_HEIGHTS = setOf(HEIGHT, LEGACY_HEIGHT)
         val PNG_SIGNATURE = byteArrayOf(
             0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
         )

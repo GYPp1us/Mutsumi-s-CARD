@@ -28,7 +28,7 @@
 
 - Android 原生：Kotlin + Jetpack Compose + Material 3。
 - key 仅文字，value 仅图片。
-- 所有 value 图片和实体卡片为竖向 `1024×2048`，宽高比 `1:2` / Compose `aspectRatio(0.5f)`。
+- 所有新 value 图片和实体卡片采用竖向 ISO ID-1 银行卡比例 `1024×1624`，Compose `aspectRatio(53.98f / 85.60f)`；旧 `1024×2048` 图片仅兼容读取并 FitCenter 显示。
 - 图片 FitCenter，禁止拉伸和裁切。
 - 竖屏使用底部导航；横屏宽度 `>=680dp` 使用左导航、中工作区、右上下文三栏。
 - 目标尺寸为 `360×800`、`800×360`、`800×1280`、`1280×800`。

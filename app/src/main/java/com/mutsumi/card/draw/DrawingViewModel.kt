@@ -72,7 +72,7 @@ class DrawingViewModel(
     }
 
     fun updateCamera(camera: CanvasCamera) {
-        editState { it.copy(camera = camera.clamp()) }
+        editState { it.copy(camera = camera) }
     }
 
     fun setBaseImage(bytes: ByteArray) {

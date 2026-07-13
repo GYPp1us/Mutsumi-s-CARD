@@ -516,7 +516,7 @@ private fun DrawingCanvas(
                     val centroid = event.calculateCentroid(useCurrent = true)
                     val pan = event.calculatePan()
                     val zoom = event.calculateZoom()
-                    if (centroid.isSpecified && (pan != Offset.Zero || zoom != 1f)) {
+                    if (centroid.x.isFinite() && centroid.y.isFinite() && (pan != Offset.Zero || zoom != 1f)) {
                         gestureCamera = gestureCamera.transform(
                             centroidX = centroid.x,
                             centroidY = centroid.y,

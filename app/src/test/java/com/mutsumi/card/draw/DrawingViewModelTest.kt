@@ -68,7 +68,7 @@ class DrawingViewModelTest {
         assertThat(cardId).isEqualTo(42L)
         assertThat(savedKey).isEqualTo("叶绿体")
         assertThat(decoded.width).isEqualTo(1024)
-        assertThat(decoded.height).isEqualTo(2048)
+        assertThat(decoded.height).isEqualTo(1624)
         assertThat(viewModel.state.value.keyText).isEmpty()
         assertThat(viewModel.state.value.document.hasContent).isFalse()
         assertThat(viewModel.state.value.canUndo).isFalse()

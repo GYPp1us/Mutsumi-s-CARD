@@ -12,7 +12,11 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -39,6 +43,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -46,6 +51,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -66,6 +72,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
 import java.io.ByteArrayOutputStream
 
 data class DrawnCardImage(
@@ -79,29 +87,51 @@ private data class DrawingStroke(val points: List<StrokePoint>, val color: Color
 private enum class EditMode { Draw, Move }
 private enum class DrawStep { Key, Canvas }
 
+private class DrawingSessionViewModel : ViewModel() {
+    val keyText = mutableStateOf("")
+    val status = mutableStateOf("先填写文字 key，再进入画布绘制图片 value。")
+    val step = mutableStateOf(DrawStep.Key)
+    val strokes = mutableStateListOf<DrawingStroke>()
+    val currentPoints = mutableStateListOf<StrokePoint>()
+    val penColor = mutableStateOf(Color(0xFF16352E))
+    val penWidth = androidx.compose.runtime.mutableFloatStateOf(6f)
+    val editMode = mutableStateOf(EditMode.Draw)
+    val viewportSize = mutableStateOf(IntSize.Zero)
+    val camera = mutableStateOf<CanvasCamera?>(null)
+    val baseImageBytes = mutableStateOf<ByteArray?>(null)
+}
+
 @Composable
 fun DrawScreen(
     onSaveCard: (String, DrawnCardImage) -> String,
 ) {
+    val session: DrawingSessionViewModel = viewModel { DrawingSessionViewModel() }
     val context = LocalContext.current
-    var keyText by remember { mutableStateOf("") }
-    var status by remember { mutableStateOf("先填写文字 key，再进入画布绘制图片 value。") }
-    var step by remember { mutableStateOf(DrawStep.Key) }
-    val strokes = remember { mutableStateListOf<DrawingStroke>() }
-    val currentPoints = remember { mutableStateListOf<StrokePoint>() }
-    var penColor by remember { mutableStateOf(Color(0xFF16352E)) }
-    var penWidth by remember { mutableFloatStateOf(6f) }
-    var editMode by remember { mutableStateOf(EditMode.Draw) }
-    var viewportSize by remember { mutableStateOf(IntSize.Zero) }
-    var camera by remember { mutableStateOf<CanvasCamera?>(null) }
-    var baseImageBytes by remember { mutableStateOf<ByteArray?>(null) }
-    var baseBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var keyText by session.keyText
+    var status by session.status
+    var step by session.step
+    val strokes = session.strokes
+    val currentPoints = session.currentPoints
+    var penColor by session.penColor
+    var penWidth by session.penWidth
+    var editMode by session.editMode
+    var viewportSize by session.viewportSize
+    var camera by session.camera
+    var baseImageBytes by session.baseImageBytes
+    val baseBitmap = remember(baseImageBytes) {
+        baseImageBytes?.let { bytes ->
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                ?: error("底图不是可解码的图片")
+        }
+    }
+    DisposableEffect(baseBitmap) {
+        onDispose { baseBitmap?.takeUnless(Bitmap::isRecycled)?.recycle() }
+    }
 
     LaunchedEffect(viewportSize) {
         if (viewportSize.width > 0 && viewportSize.height > 0) {
             camera = camera
-                ?.copy(viewportWidth = viewportSize.width.toFloat(), viewportHeight = viewportSize.height.toFloat())
-                ?.clamp()
+                ?.withViewport(viewportSize.width.toFloat(), viewportSize.height.toFloat())
                 ?: CanvasCamera.initial(viewportSize.width.toFloat(), viewportSize.height.toFloat())
         }
     }
@@ -110,11 +140,11 @@ fun DrawScreen(
         if (uri != null) {
             val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                 ?: error("无法读取底图：$uri")
-            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                ?: error("底图不是可解码的图片：$uri")
+            checkNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.also(Bitmap::recycle)) {
+                "底图不是可解码的图片：$uri"
+            }
             baseImageBytes = bytes
-            baseBitmap = bitmap
-            status = "底图已插入：保存时会等比居中放入 2:1 画布。"
+            status = "底图已插入：保存时会等比居中放入银行卡比例画布。"
             step = DrawStep.Canvas
         }
     }
@@ -123,7 +153,6 @@ fun DrawScreen(
         strokes.clear()
         currentPoints.clear()
         baseImageBytes = null
-        baseBitmap = null
         camera = viewportSize.takeIf { it.width > 0 && it.height > 0 }?.let {
             CanvasCamera.initial(it.width.toFloat(), it.height.toFloat())
         }
@@ -163,7 +192,7 @@ fun DrawScreen(
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val landscape = maxWidth > maxHeight
         if (landscape) {
-            Row(modifier = Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(modifier = Modifier.fillMaxSize().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 LandscapeTools(
                     keyText = keyText,
                     status = status,
@@ -180,18 +209,20 @@ fun DrawScreen(
                     onSave = ::save,
                     modifier = Modifier.width(260.dp).fillMaxHeight(),
                 )
-                DrawingCanvas(
-                    strokes = strokes,
-                    currentPoints = currentPoints,
-                    penColor = penColor,
-                    penWidth = penWidth,
-                    editMode = editMode,
-                    camera = camera,
-                    baseBitmap = baseBitmap,
-                    onCameraChange = { camera = it.clamp() },
-                    onSizeChange = { viewportSize = it },
-                    modifier = Modifier.weight(1f).fillMaxHeight(),
-                )
+                CardCanvasFrame(Modifier.weight(1f).fillMaxHeight()) { canvasModifier ->
+                    DrawingCanvas(
+                        strokes = strokes,
+                        currentPoints = currentPoints,
+                        penColor = penColor,
+                        penWidth = penWidth,
+                        editMode = editMode,
+                        camera = camera,
+                        baseBitmap = baseBitmap,
+                        onCameraChange = { camera = it },
+                        onSizeChange = { viewportSize = it },
+                        modifier = canvasModifier,
+                    )
+                }
             }
         } else {
             when (step) {
@@ -203,13 +234,16 @@ fun DrawScreen(
                         if (keyText.isBlank()) {
                             status = "请输入文字 key。"
                         } else {
-                            status = "保存图为统一 2:1；底图等比居中；移动缩放用于浏览实体大画布。"
+                            status = "保存图为统一银行卡比例；底图等比居中；移动缩放用于浏览实体画布。"
                             step = DrawStep.Canvas
                         }
                     },
                     modifier = Modifier.fillMaxSize(),
                 )
-                DrawStep.Canvas -> Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                DrawStep.Canvas -> Column(
+                    modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     CompactPortraitTools(
                         penColor = penColor,
                         penWidth = penWidth,
@@ -220,18 +254,20 @@ fun DrawScreen(
                         onInsertBase = { imagePicker.launch("image/*") },
                         onBackToKey = { step = DrawStep.Key },
                     )
-                    DrawingCanvas(
-                        strokes = strokes,
-                        currentPoints = currentPoints,
-                        penColor = penColor,
-                        penWidth = penWidth,
-                        editMode = editMode,
-                        camera = camera,
-                        baseBitmap = baseBitmap,
-                        onCameraChange = { camera = it.clamp() },
-                        onSizeChange = { viewportSize = it },
-                    modifier = Modifier.fillMaxWidth().weight(1f).aspectRatio(0.5f),
-                    )
+                    CardCanvasFrame(Modifier.fillMaxWidth().weight(1f)) { canvasModifier ->
+                        DrawingCanvas(
+                            strokes = strokes,
+                            currentPoints = currentPoints,
+                            penColor = penColor,
+                            penWidth = penWidth,
+                            editMode = editMode,
+                            camera = camera,
+                            baseBitmap = baseBitmap,
+                            onCameraChange = { camera = it },
+                            onSizeChange = { viewportSize = it },
+                            modifier = canvasModifier,
+                        )
+                    }
                     BottomActions(
                         onUndo = { if (strokes.isNotEmpty()) strokes.removeAt(strokes.lastIndex) },
                         onClear = ::clearCanvas,
@@ -252,12 +288,12 @@ private fun KeyEntryPanel(
     modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier = modifier.verticalScroll(rememberScrollState()),
+        modifier = modifier.padding(16.dp).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Text("录入卡片", style = MaterialTheme.typography.titleLarge)
         Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text("key 只存文字；value 只存图片。图片统一保存为 2:1，底图不会拉伸。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("key 只存文字；value 只存图片。图片统一保存为银行卡比例，底图不会拉伸。", color = MaterialTheme.colorScheme.onSurfaceVariant)
         OutlinedTextField(
             value = keyText,
             onValueChange = onKeyChange,
@@ -267,6 +303,22 @@ private fun KeyEntryPanel(
         Button(onClick = onNext, modifier = Modifier.fillMaxWidth()) {
             Text("进入绘图")
         }
+    }
+}
+
+@Composable
+private fun CardCanvasFrame(
+    modifier: Modifier,
+    content: @Composable (Modifier) -> Unit,
+) {
+    BoxWithConstraints(modifier = modifier, contentAlignment = Alignment.Center) {
+        val widthFromHeight = maxHeight * DrawingCanvasSpec.aspectRatio
+        val canvasModifier = if (widthFromHeight <= maxWidth) {
+            Modifier.height(maxHeight).width(widthFromHeight)
+        } else {
+            Modifier.width(maxWidth).height(maxWidth / DrawingCanvasSpec.aspectRatio)
+        }
+        content(canvasModifier)
     }
 }
 
@@ -426,6 +478,8 @@ private fun DrawingCanvas(
 ) {
     val shape = RoundedCornerShape(8.dp)
     val activeCamera = camera
+    val latestCamera by rememberUpdatedState(camera)
+    val latestOnCameraChange by rememberUpdatedState(onCameraChange)
     val pointerModifier = when (editMode) {
         EditMode.Draw -> Modifier.pointerInput(activeCamera, penColor, penWidth) {
             if (activeCamera == null) return@pointerInput
@@ -452,19 +506,31 @@ private fun DrawingCanvas(
                 },
             )
         }
-        EditMode.Move -> Modifier.pointerInput(activeCamera) {
-            if (activeCamera == null) return@pointerInput
-            detectTransformGestures { centroid, pan, zoom, _ ->
-                val newScale = (activeCamera.scale * zoom).coerceIn(0.5f, 6f)
-                val centroidModelX = activeCamera.offsetX + centroid.x / activeCamera.scale
-                val centroidModelY = activeCamera.offsetY + centroid.y / activeCamera.scale
-                onCameraChange(
-                    activeCamera.copy(
-                        scale = newScale,
-                        offsetX = centroidModelX - (centroid.x + pan.x) / newScale,
-                        offsetY = centroidModelY - (centroid.y + pan.y) / newScale,
-                    ),
-                )
+        EditMode.Move -> Modifier.pointerInput(editMode) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false)
+                var gestureCamera = latestCamera ?: return@awaitEachGesture
+                var hasPressedPointers: Boolean
+                do {
+                    val event = awaitPointerEvent()
+                    val centroid = event.calculateCentroid(useCurrent = true)
+                    val pan = event.calculatePan()
+                    val zoom = event.calculateZoom()
+                    if (centroid.isSpecified && (pan != Offset.Zero || zoom != 1f)) {
+                        gestureCamera = gestureCamera.transform(
+                            centroidX = centroid.x,
+                            centroidY = centroid.y,
+                            panX = pan.x,
+                            panY = pan.y,
+                            zoomFactor = zoom,
+                        )
+                        latestOnCameraChange(gestureCamera)
+                    }
+                    event.changes.forEach { change ->
+                        if (change.pressed) change.consume()
+                    }
+                    hasPressedPointers = event.changes.any { it.pressed }
+                } while (hasPressedPointers)
             }
         }
     }
@@ -531,7 +597,7 @@ private fun renderCanvasPng(
     baseBitmap: Bitmap?,
     backgroundColor: Color,
 ): ByteArray {
-    require(strokes.isNotEmpty()) { "图片 value 至少需要一笔绘制内容" }
+    require(strokes.isNotEmpty() || baseBitmap != null) { "图片 value 需要笔迹或底图" }
 
     val bitmap = Bitmap.createBitmap(CardCanvasSpec.exportWidth, CardCanvasSpec.exportHeight, Bitmap.Config.ARGB_8888)
     val canvas = AndroidCanvas(bitmap)

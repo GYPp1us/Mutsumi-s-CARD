@@ -13,7 +13,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -36,6 +38,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.mutsumi.card.domain.review.ReviewFeedback
 import com.mutsumi.card.domain.workflow.MemoryCard
+import com.mutsumi.card.draw.DrawingCanvasSpec
 import com.mutsumi.card.ui.CardValueImage
 import java.io.File
 
@@ -104,10 +107,19 @@ fun StudyScreen(
         }
         val renderedState = activeProjection?.physicalState ?: returnState ?: restingProjection.physicalState
 
-        Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             Text(text = "随机推荐", style = MaterialTheme.typography.titleMedium)
             Text(text = message, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+            BoxWithConstraints(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                contentAlignment = Alignment.Center,
+            ) {
+                val maximumCardWidth = maxWidth * 0.8f
+                val widthFromHeight = maxHeight * DrawingCanvasSpec.aspectRatio
+                val cardWidth = if (widthFromHeight < maximumCardWidth) widthFromHeight else maximumCardWidth
                 FloatingStudyCard(
                     card = card,
                     imageRoot = imageRoot,
@@ -154,7 +166,7 @@ fun StudyScreen(
                     },
                     policy = policy,
                     committedSide = committedSide,
-                    modifier = Modifier.fillMaxWidth(0.98f).aspectRatio(0.5f),
+                    modifier = Modifier.width(cardWidth).height(cardWidth / DrawingCanvasSpec.aspectRatio),
                 )
             }
         }
@@ -305,7 +317,10 @@ private fun PhysicalStudyCard(
 
 @Composable
 private fun EmptyStudyState() {
-    Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
         Text(text = "随机推荐", style = MaterialTheme.typography.titleMedium)
         Text("当前卡组为空，请先到“录入”创建第一张卡片。")
     }

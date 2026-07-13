@@ -107,7 +107,7 @@ class BackupValidator(
             try {
                 pngValidator.validate(file.readBytes())
             } catch (error: IllegalArgumentException) {
-                throw BackupFormatException("图片不是有效的 1024×2048 PNG：$path", error)
+                throw BackupFormatException("图片不是有效的银行卡比例或兼容旧版 PNG：$path", error)
             }
         }
         return ValidatedArchive(session, manifest, snapshot, images, archiveCleanup)

@@ -74,6 +74,7 @@ import androidx.compose.ui.unit.sp
 import com.mutsumi.card.domain.model.Deck
 import com.mutsumi.card.domain.model.MemoryCard
 import com.mutsumi.card.data.image.CardImageStore
+import com.mutsumi.card.draw.DrawingCanvasSpec
 import com.mutsumi.card.ui.adaptive.AppLayoutMode
 import com.mutsumi.card.ui.theme.DangerCoral
 import com.mutsumi.card.ui.theme.Divider
@@ -283,7 +284,7 @@ private fun CardListItem(
         Spacer(Modifier.width(9.dp))
         imageContent(
             card,
-            Modifier.width(thumbnailWidth).aspectRatio(0.5f)
+            Modifier.width(thumbnailWidth).aspectRatio(DrawingCanvasSpec.aspectRatio)
                 .clip(MaterialTheme.shapes.extraSmall).border(1.dp, StrongDivider, MaterialTheme.shapes.extraSmall)
                 .testTag("卡片缩略图-${card.id}"),
         )
@@ -475,7 +476,7 @@ fun CardsContextPane(
                 } else {
                     Text(card.keyText, style = MaterialTheme.typography.titleLarge, modifier = Modifier.fillMaxWidth())
                     Spacer(Modifier.height(12.dp))
-                    imageContent(card, Modifier.width(150.dp).aspectRatio(0.5f).border(1.dp, StrongDivider, MaterialTheme.shapes.small))
+                    imageContent(card, Modifier.width(150.dp).aspectRatio(DrawingCanvasSpec.aspectRatio).border(1.dp, StrongDivider, MaterialTheme.shapes.small))
                     Spacer(Modifier.height(12.dp))
                     ReviewText(card)
                     Spacer(Modifier.height(16.dp))
@@ -519,7 +520,7 @@ private fun CompactCardDetails(
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
         imageContent(
             card,
-            Modifier.width(54.dp).aspectRatio(0.5f).border(1.dp, StrongDivider, MaterialTheme.shapes.small)
+            Modifier.width(54.dp).aspectRatio(DrawingCanvasSpec.aspectRatio).border(1.dp, StrongDivider, MaterialTheme.shapes.small)
                 .testTag("紧凑详情预览"),
         )
         Column(Modifier.weight(1f).padding(start = 10.dp)) {

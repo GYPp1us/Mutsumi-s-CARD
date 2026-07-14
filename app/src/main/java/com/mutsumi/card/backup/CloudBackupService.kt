@@ -192,14 +192,12 @@ class RepositoryCloudBackupOperations(
 
     private fun fingerprints(document: CloudSnapshotDocument): Map<Long, String> {
         val images = document.images.associate { it.localPath to it.sha256 }
-        val reviews = document.snapshot.reviews.associateBy { it.cardId }
         return document.snapshot.cards.associate { card ->
             val fingerprint = CloudCardFingerprint(
                 deckId = card.deckId,
                 keyText = card.keyText,
                 archived = card.archived,
                 imageSha256 = requireNotNull(images[card.valueImagePath]),
-                review = requireNotNull(reviews[card.id]),
             )
             card.id to sha256(json.encodeToString(fingerprint).encodeToByteArray())
         }
@@ -254,7 +252,6 @@ private data class CloudCardFingerprint(
     val keyText: String,
     val archived: Boolean,
     val imageSha256: String,
-    val review: BackupReviewState,
 )
 
 private fun requireSafeSnapshotId(value: String) {

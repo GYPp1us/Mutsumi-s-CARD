@@ -7,8 +7,8 @@
 
 ## 当前目标
 
-- 当前开发目标是完成并发布 `v0.4.5`。
-- 当前开发分支：`codex/v0.4.5-cloud-backup`。
+- 当前开发目标是完成并发布 `v0.4.6`。
+- 当前开发分支：`codex/v0.4.6-ignore-review-delta`。
 - 当前隔离工作区：`.worktrees/v0.4.0-refactor`。
 - 不要在主工作区的 `main` 上直接实现重构。
 - 必须持续推进至 GitHub Release 包含已签名 APK；中间阶段完成不等于目标完成。

@@ -44,6 +44,7 @@ data class BackupCard(
     val createdAt: Long,
     val updatedAt: Long,
     val archived: Boolean,
+    val frontImagePath: String? = null,
 )
 
 @Serializable

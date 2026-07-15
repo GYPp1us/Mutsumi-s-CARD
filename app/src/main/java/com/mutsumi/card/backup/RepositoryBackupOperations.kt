@@ -32,7 +32,10 @@ class RepositoryBackupOperations(
         val snapshot = BackupSnapshot(
             decks = decks.map { BackupDeck(it.id, it.name, timestamp, timestamp) },
             cards = cards.map {
-                BackupCard(it.id, it.deckId, it.keyText, it.valueImagePath, timestamp, timestamp, it.archived)
+                BackupCard(
+                    it.id, it.deckId, it.keyText, it.valueImagePath, timestamp, timestamp, it.archived,
+                    frontImagePath = it.frontImagePath,
+                )
             },
             reviews = cards.map {
                 BackupReviewState(
@@ -43,7 +46,12 @@ class RepositoryBackupOperations(
         )
         return BackupExportData(
             snapshot = snapshot,
-            images = cards.associate { it.valueImagePath to imageStore.resolve(it.valueImagePath) },
+            images = cards.flatMap { card ->
+                buildList {
+                    add(card.valueImagePath)
+                    card.frontImagePath?.let(::add)
+                }
+            }.associateWith(imageStore::resolve),
         )
     }
 
@@ -54,7 +62,10 @@ class RepositoryBackupOperations(
         batch.snapshot.cards.forEach { card ->
             val source = requireNotNull(batch.images[card.valueImagePath]) { "备份图片缺失：${card.valueImagePath}" }
             val targetDeck = requireNotNull(deckIds[card.deckId]) { "备份卡组映射缺失：${card.deckId}" }
-            cardIds[card.id] = repository.saveCard(targetDeck, card.keyText, source.readBytes())
+            val front = card.frontImagePath?.let { path ->
+                requireNotNull(batch.images[path]) { "备份正面图片缺失：$path" }.readBytes()
+            }
+            cardIds[card.id] = repository.saveCard(targetDeck, card.keyText, front, source.readBytes())
         }
         batch.snapshot.reviews.forEach { review ->
             val cardId = requireNotNull(cardIds[review.cardId]) { "备份卡片映射缺失：${review.cardId}" }

@@ -22,4 +22,5 @@ data class MemoryCard(
     val valueImagePath: String,
     val archived: Boolean,
     val review: ReviewState,
+    val frontImagePath: String? = null,
 )

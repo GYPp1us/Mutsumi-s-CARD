@@ -35,6 +35,7 @@ data class CardEntity(
     val createdAt: Long,
     val updatedAt: Long,
     val archived: Boolean = false,
+    val frontImagePath: String? = null,
 )
 
 @Entity(

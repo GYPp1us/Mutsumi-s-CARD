@@ -135,6 +135,7 @@ abstract class CardDao {
     open suspend fun deleteCardAndQueueImageDeletion(card: CardEntity, queuedAt: Long) {
         check(deleteCardRow(card) == 1) { "卡片 ${card.id} 不存在，无法删除" }
         insertPendingImageDeletion(PendingImageDeletionEntity(card.valueImagePath, queuedAt))
+        card.frontImagePath?.let { insertPendingImageDeletion(PendingImageDeletionEntity(it, queuedAt)) }
     }
 
     @Transaction

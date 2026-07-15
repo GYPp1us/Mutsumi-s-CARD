@@ -96,7 +96,12 @@ class BackupValidator(
         validateSnapshot(snapshot)
         validateCounts(manifest, snapshot)
 
-        val imagePaths = snapshot.cards.map { it.valueImagePath }.toSet()
+        val imagePaths = snapshot.cards.flatMap { card ->
+            buildList {
+                add(card.valueImagePath)
+                card.frontImagePath?.let(::add)
+            }
+        }.toSet()
         val declaredImages = manifest.resources.map { it.path }.filter { it.startsWith("images/") }.toSet()
         if (declaredImages != imagePaths) throw BackupFormatException("清单图片与数据库引用不一致")
         val images = imagePaths.associateWith { path ->
@@ -196,7 +201,9 @@ class BackupValidator(
 
     private fun validateCounts(manifest: BackupManifest, snapshot: BackupSnapshot) {
         if (manifest.deckCount != snapshot.decks.size || manifest.cardCount != snapshot.cards.size ||
-            manifest.reviewCount != snapshot.reviews.size || manifest.imageCount != snapshot.cards.size
+            manifest.reviewCount != snapshot.reviews.size || manifest.imageCount != snapshot.cards.sumOf {
+                1 + if (it.frontImagePath == null) 0 else 1
+            }
         ) throw BackupFormatException("备份清单数量与数据库数量不一致")
     }
 

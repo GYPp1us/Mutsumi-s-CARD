@@ -1,5 +1,9 @@
 package com.mutsumi.card.draw
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas as AndroidCanvas
@@ -11,7 +15,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
@@ -31,10 +34,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
@@ -50,8 +50,8 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,384 +63,314 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 import java.io.ByteArrayOutputStream
+import kotlin.math.hypot
 
 data class DrawnCardImage(
-    val pngBytes: ByteArray,
-    val baseImageBytes: ByteArray?,
-    val strokeCount: Int,
+    val frontPngBytes: ByteArray?,
+    val backPngBytes: ByteArray,
 )
 
-private data class StrokePoint(val position: Offset)
-private data class DrawingStroke(val points: List<StrokePoint>, val color: Color, val width: Float)
-private enum class EditMode { Draw, Move }
-private enum class DrawStep { Key, Canvas }
+private enum class CardFace { Front, Back }
+private enum class DrawTool { Pen, Eraser, Move, Markdown }
 
-private class DrawingSessionViewModel : ViewModel() {
-    val keyText = mutableStateOf("")
-    val status = mutableStateOf("先填写文字 key，再进入画布绘制图片 value。")
-    val step = mutableStateOf(DrawStep.Key)
-    val strokes = mutableStateListOf<DrawingStroke>()
-    val currentPoints = mutableStateListOf<StrokePoint>()
-    val penColor = mutableStateOf(Color(0xFF16352E))
-    val penWidth = androidx.compose.runtime.mutableFloatStateOf(6f)
-    val editMode = mutableStateOf(EditMode.Draw)
-    val viewportSize = mutableStateOf(IntSize.Zero)
-    val camera = mutableStateOf<CanvasCamera?>(null)
+private data class FacePoint(val position: Offset)
+private data class FaceStroke(val points: List<FacePoint>, val color: Color, val width: Float)
+
+private class FaceDraft {
+    val strokes = mutableStateListOf<FaceStroke>()
+    val currentPoints = mutableStateListOf<FacePoint>()
     val baseImageBytes = mutableStateOf<ByteArray?>(null)
     val baseImageRect = mutableStateOf<CanvasRect?>(null)
+    val camera = mutableStateOf<CanvasCamera?>(null)
+    val viewport = mutableStateOf(IntSize.Zero)
+    val markdownSource = mutableStateOf("")
+    val markdownEditing = mutableStateOf(false)
+
+    fun hasContent(): Boolean = strokes.isNotEmpty() || baseImageBytes.value != null || markdownSource.value.isNotBlank()
+
+    fun clear() {
+        strokes.clear()
+        currentPoints.clear()
+        baseImageBytes.value = null
+        baseImageRect.value = null
+        markdownSource.value = ""
+        markdownEditing.value = false
+        viewport.value.takeIf { it.width > 0 && it.height > 0 }?.let { size ->
+            camera.value = CanvasCamera.initial(size.width.toFloat(), size.height.toFloat())
+        }
+    }
+}
+
+private class DualFaceDrawingViewModel : ViewModel() {
+    val keyText = mutableStateOf("")
+    val activeFace = mutableStateOf(CardFace.Front)
+    val front = FaceDraft()
+    val back = FaceDraft()
+    val tool = mutableStateOf(DrawTool.Pen)
+    val penColor = mutableStateOf(Color(0xFF16352E))
+    val penWidth = mutableFloatStateOf(6f)
+    val status = mutableStateOf("正面可选；背面必须有图片内容。")
+
+    fun face(side: CardFace): FaceDraft = if (side == CardFace.Front) front else back
 }
 
 @Composable
-fun DrawScreen(
-    onSaveCard: (String, DrawnCardImage) -> String,
-) {
-    val session: DrawingSessionViewModel = viewModel { DrawingSessionViewModel() }
+fun DrawScreen(onSaveCard: (String, DrawnCardImage) -> String) {
+    val session: DualFaceDrawingViewModel = viewModel { DualFaceDrawingViewModel() }
     val context = LocalContext.current
-    var keyText by session.keyText
-    var status by session.status
-    var step by session.step
-    val strokes = session.strokes
-    val currentPoints = session.currentPoints
-    var penColor by session.penColor
-    var penWidth by session.penWidth
-    var editMode by session.editMode
-    var viewportSize by session.viewportSize
-    var camera by session.camera
-    var baseImageBytes by session.baseImageBytes
-    var baseImageRect by session.baseImageRect
-    val baseBitmap = remember(baseImageBytes) {
-        baseImageBytes?.let { bytes ->
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                ?: error("底图不是可解码的图片")
-        }
-    }
-    DisposableEffect(baseBitmap) {
-        onDispose { baseBitmap?.takeUnless(Bitmap::isRecycled)?.recycle() }
-    }
+    val markdownRenderer = remember(context) { MarkdownLayerRenderer(context) }
+    val activity = remember(context) { context.findActivity() }
+    var pickerTarget by remember { mutableStateOf<CardFace?>(null) }
 
-    LaunchedEffect(viewportSize) {
-        if (viewportSize.width > 0 && viewportSize.height > 0) {
-            camera = camera
-                ?.withViewport(viewportSize.width.toFloat(), viewportSize.height.toFloat())
-                ?: CanvasCamera.initial(viewportSize.width.toFloat(), viewportSize.height.toFloat())
-        }
+    DisposableEffect(activity) {
+        val previous = activity?.requestedOrientation
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        onDispose { activity?.requestedOrientation = previous ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
     }
 
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri != null) {
-            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                ?: error("无法读取底图：$uri")
-            val decoded = checkNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size)) {
-                "底图不是可解码的图片：$uri"
-            }
-            baseImageRect = fitImageInVisibleWorld(decoded.width, decoded.height, camera)
-            decoded.recycle()
-            baseImageBytes = bytes
-            status = "底图已插入：保存时会等比居中放入银行卡比例画布。"
-            step = DrawStep.Canvas
-        }
-    }
-
-    fun clearCanvas() {
-        strokes.clear()
-        currentPoints.clear()
-        baseImageBytes = null
-        baseImageRect = null
-        camera = viewportSize.takeIf { it.width > 0 && it.height > 0 }?.let {
-            CanvasCamera.initial(it.width.toFloat(), it.height.toFloat())
-        }
-        status = "画布已清空。"
+        if (uri == null) return@rememberLauncherForActivityResult
+        val face = requireNotNull(pickerTarget) { "未指定底图目标卡面" }
+        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            ?: error("无法读取底图：$uri")
+        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            ?: error("底图不是可解码的图片：$uri")
+        val draft = session.face(face)
+        draft.baseImageRect.value = fitImageInVisibleWorld(bitmap.width, bitmap.height, draft.camera.value)
+        bitmap.recycle()
+        draft.baseImageBytes.value = bytes
+        session.activeFace.value = face
+        session.status.value = "${face.label}底图已插入。"
     }
 
     fun save() {
-        if (keyText.isBlank()) {
-            status = "请输入文字 key。"
-            step = DrawStep.Key
+        val key = session.keyText.value.trim()
+        if (key.isEmpty()) {
+            session.status.value = "请输入文字 key。"
             return
         }
-        if (strokes.isEmpty() && baseBitmap == null) {
-            status = "请先绘制或插入图片 value。"
-            step = DrawStep.Canvas
+        if (!session.back.hasContent()) {
+            session.status.value = "背面需要笔迹、底图或 Markdown 内容。"
             return
         }
-        val pngBytes = renderCanvasPng(
-            strokes = strokes,
-            baseBitmap = baseBitmap,
-            baseImageRect = baseImageRect,
-            camera = requireNotNull(camera) { "画布相机尚未初始化" },
-            backgroundColor = Color(0xFFF8FAF9),
-        )
-        val message = onSaveCard(
-            keyText,
-            DrawnCardImage(
-                pngBytes = pngBytes,
-                baseImageBytes = baseImageBytes,
-                strokeCount = strokes.size,
-            ),
-        )
-        keyText = ""
-        clearCanvas()
-        step = DrawStep.Key
-        status = "$message。下一张卡片可以继续录入。"
+        val back = renderFacePng(session.back, markdownRenderer)
+        val front = if (session.front.hasContent()) renderFacePng(session.front, markdownRenderer) else null
+        val message = onSaveCard(key, DrawnCardImage(front, back))
+        session.keyText.value = ""
+        session.front.clear()
+        session.back.clear()
+        session.activeFace.value = CardFace.Front
+        session.status.value = "$message。"
     }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val landscape = maxWidth > maxHeight
-        if (landscape) {
-            Row(
-                modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                LandscapeTools(
-                    keyText = keyText,
-                    penColor = penColor,
-                    penWidth = penWidth,
-                    editMode = editMode,
-                    onKeyChange = { keyText = it },
-                    onPenColorChange = { penColor = it },
-                    onPenWidthChange = { penWidth = it },
-                    onEditModeChange = { editMode = it },
-                    onInsertBase = { imagePicker.launch("image/*") },
-                    onUndo = { if (strokes.isNotEmpty()) strokes.removeAt(strokes.lastIndex) },
-                    onClear = ::clearCanvas,
-                    onSave = ::save,
-                    modifier = Modifier.width(208.dp).fillMaxHeight(),
-                )
-                CardCanvasFrame(Modifier.weight(1f).fillMaxHeight()) { canvasModifier ->
-                    DrawingCanvas(
-                        strokes = strokes,
-                        currentPoints = currentPoints,
-                        penColor = penColor,
-                        penWidth = penWidth,
-                        editMode = editMode,
-                        camera = camera,
-                        baseBitmap = baseBitmap,
-                        baseImageRect = baseImageRect,
-                        onCameraChange = { camera = it },
-                        onSizeChange = { viewportSize = it },
-                        modifier = canvasModifier,
-                    )
-                }
+    BoxWithConstraints(
+        modifier = Modifier.fillMaxSize().onPreviewKeyEvent { event ->
+            if (event.type == KeyEventType.KeyDown && event.isCtrlPressed && event.key == Key.W) {
+                val draft = session.face(session.activeFace.value)
+                draft.markdownEditing.value = !draft.markdownEditing.value
+                session.tool.value = DrawTool.Markdown
+                true
+            } else {
+                false
             }
-        } else {
-            when (step) {
-                DrawStep.Key -> KeyEntryPanel(
-                    keyText = keyText,
-                    status = status,
-                    onKeyChange = { keyText = it },
-                    onNext = {
-                        if (keyText.isBlank()) {
-                            status = "请输入文字 key。"
-                        } else {
-                            status = "保存图为统一银行卡比例；底图等比居中；移动缩放用于浏览实体画布。"
-                            step = DrawStep.Canvas
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize(),
-                )
-                DrawStep.Canvas -> Column(
-                    modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    CompactPortraitTools(
-                        penColor = penColor,
-                        penWidth = penWidth,
-                        editMode = editMode,
-                        onPenColorChange = { penColor = it },
-                        onPenWidthChange = { penWidth = it },
-                        onEditModeChange = { editMode = it },
-                        onInsertBase = { imagePicker.launch("image/*") },
-                        onBackToKey = { step = DrawStep.Key },
-                    )
-                    CardCanvasFrame(Modifier.fillMaxWidth().weight(1f)) { canvasModifier ->
-                        DrawingCanvas(
-                            strokes = strokes,
-                            currentPoints = currentPoints,
-                            penColor = penColor,
-                            penWidth = penWidth,
-                            editMode = editMode,
-                            camera = camera,
-                            baseBitmap = baseBitmap,
-                            baseImageRect = baseImageRect,
-                            onCameraChange = { camera = it },
-                            onSizeChange = { viewportSize = it },
-                            modifier = canvasModifier,
-                        )
-                    }
-                    BottomActions(
-                        onUndo = { if (strokes.isNotEmpty()) strokes.removeAt(strokes.lastIndex) },
-                        onClear = ::clearCanvas,
-                        onSave = ::save,
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun KeyEntryPanel(
-    keyText: String,
-    status: String,
-    onKeyChange: (String) -> Unit,
-    onNext: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier.padding(16.dp).verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        },
     ) {
-        Text("录入卡片", style = MaterialTheme.typography.titleLarge)
-        Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text("key 只存文字；value 只存图片。图片统一保存为银行卡比例，底图不会拉伸。", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        OutlinedTextField(
-            value = keyText,
-            onValueChange = onKeyChange,
-            label = { Text("文字 key") },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Button(onClick = onNext, modifier = Modifier.fillMaxWidth()) {
-            Text("进入绘图")
+        if (maxWidth <= maxHeight) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("录入仅支持横屏", style = MaterialTheme.typography.titleMedium)
+            }
+            return@BoxWithConstraints
+        }
+        Row(
+            modifier = Modifier.fillMaxSize().padding(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            SharedTools(
+                keyText = session.keyText.value,
+                activeFace = session.activeFace.value,
+                tool = session.tool.value,
+                penColor = session.penColor.value,
+                penWidth = session.penWidth.floatValue,
+                status = session.status.value,
+                markdownEditing = session.face(session.activeFace.value).markdownEditing.value,
+                onKeyChange = { session.keyText.value = it },
+                onToolChange = { tool ->
+                    session.tool.value = tool
+                    if (tool == DrawTool.Markdown) session.face(session.activeFace.value).markdownEditing.value = true
+                },
+                onColorChange = { session.penColor.value = it },
+                onWidthChange = { session.penWidth.floatValue = it },
+                onInsertBase = {
+                    pickerTarget = session.activeFace.value
+                    imagePicker.launch("image/*")
+                },
+                onUndo = {
+                    val draft = session.face(session.activeFace.value)
+                    if (draft.strokes.isNotEmpty()) draft.strokes.removeAt(draft.strokes.lastIndex)
+                },
+                onClear = { session.face(session.activeFace.value).clear() },
+                onToggleMarkdown = {
+                    val draft = session.face(session.activeFace.value)
+                    draft.markdownEditing.value = !draft.markdownEditing.value
+                    session.tool.value = DrawTool.Markdown
+                },
+                onSave = ::save,
+                modifier = Modifier.width(208.dp).fillMaxHeight(),
+            )
+            FacePanel(
+                face = CardFace.Front,
+                draft = session.front,
+                active = session.activeFace.value == CardFace.Front,
+                tool = session.tool.value,
+                penColor = session.penColor.value,
+                penWidth = session.penWidth.floatValue,
+                markdownRenderer = markdownRenderer,
+                onSelect = { session.activeFace.value = CardFace.Front },
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+            )
+            FacePanel(
+                face = CardFace.Back,
+                draft = session.back,
+                active = session.activeFace.value == CardFace.Back,
+                tool = session.tool.value,
+                penColor = session.penColor.value,
+                penWidth = session.penWidth.floatValue,
+                markdownRenderer = markdownRenderer,
+                onSelect = { session.activeFace.value = CardFace.Back },
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+            )
         }
     }
 }
 
 @Composable
-private fun CardCanvasFrame(
-    modifier: Modifier,
-    content: @Composable (Modifier) -> Unit,
-) {
-    BoxWithConstraints(modifier = modifier, contentAlignment = Alignment.Center) {
-        val widthFromHeight = maxHeight * DrawingCanvasSpec.aspectRatio
-        val canvasModifier = if (widthFromHeight <= maxWidth) {
-            Modifier.height(maxHeight).width(widthFromHeight)
-        } else {
-            Modifier.width(maxWidth).height(maxWidth / DrawingCanvasSpec.aspectRatio)
-        }
-        content(canvasModifier)
-    }
-}
-
-@Composable
-private fun LandscapeTools(
+private fun SharedTools(
     keyText: String,
+    activeFace: CardFace,
+    tool: DrawTool,
     penColor: Color,
     penWidth: Float,
-    editMode: EditMode,
+    status: String,
+    markdownEditing: Boolean,
     onKeyChange: (String) -> Unit,
-    onPenColorChange: (Color) -> Unit,
-    onPenWidthChange: (Float) -> Unit,
-    onEditModeChange: (EditMode) -> Unit,
+    onToolChange: (DrawTool) -> Unit,
+    onColorChange: (Color) -> Unit,
+    onWidthChange: (Float) -> Unit,
     onInsertBase: () -> Unit,
     onUndo: () -> Unit,
     onClear: () -> Unit,
+    onToggleMarkdown: () -> Unit,
     onSave: () -> Unit,
-    modifier: Modifier = Modifier,
+    modifier: Modifier,
 ) {
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         OutlinedTextField(
             value = keyText,
             onValueChange = onKeyChange,
             label = { Text("文字 key") },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().height(48.dp),
         )
-        ModeChips(editMode = editMode, onEditModeChange = onEditModeChange)
-        ColorChoices(
-            penColor = penColor,
-            onPenColorChange = onPenColorChange,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Text("笔刷 ${penWidth.toInt()}", style = MaterialTheme.typography.labelSmall)
-        Slider(
-            value = penWidth,
-            onValueChange = onPenWidthChange,
-            valueRange = 2f..24f,
-            modifier = Modifier.fillMaxWidth().height(28.dp),
-        )
-        OutlinedButton(onClick = onInsertBase, modifier = Modifier.fillMaxWidth()) {
-            Text("插入底图")
+        Text("当前：${activeFace.label}", style = MaterialTheme.typography.labelMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+            ToolChip("笔", tool == DrawTool.Pen) { onToolChange(DrawTool.Pen) }
+            ToolChip("橡", tool == DrawTool.Eraser) { onToolChange(DrawTool.Eraser) }
+            ToolChip("移", tool == DrawTool.Move) { onToolChange(DrawTool.Move) }
+            ToolChip("MD", tool == DrawTool.Markdown) { onToolChange(DrawTool.Markdown) }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(Color(0xFF16352E), Color(0xFFC65F4C), Color(0xFF496F83), Color(0xFFE2B94F)).forEach { color ->
+                Box(
+                    Modifier.size(25.dp).clip(RoundedCornerShape(13.dp)).background(color)
+                        .border(if (color == penColor) 2.dp else 1.dp, Color.Black, RoundedCornerShape(13.dp))
+                        .pointerInput(color) { awaitEachGesture { awaitFirstDown(); onColorChange(color) } },
+                )
+            }
+        }
+        Slider(value = penWidth, onValueChange = onWidthChange, valueRange = 2f..24f, modifier = Modifier.height(32.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(onClick = onInsertBase, modifier = Modifier.weight(1f).height(36.dp)) { Text("插入底图") }
+            OutlinedButton(onClick = onToggleMarkdown, modifier = Modifier.weight(1f).height(36.dp)) {
+                Text(if (markdownEditing) "预览 Markdown" else "编辑 Markdown")
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(onClick = onUndo, modifier = Modifier.weight(1f).height(36.dp)) { Text("撤销") }
+            OutlinedButton(onClick = onClear, modifier = Modifier.weight(1f).height(36.dp)) { Text("清空") }
         }
         Spacer(Modifier.weight(1f))
-        BottomActions(onUndo = onUndo, onClear = onClear, onSave = onSave)
+        Text(
+            text = status,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Button(onClick = onSave, modifier = Modifier.fillMaxWidth().height(40.dp)) { Text("保存卡片") }
     }
 }
 
 @Composable
-private fun CompactPortraitTools(
+private fun ToolChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    FilterChip(selected = selected, onClick = onClick, label = { Text(label) })
+}
+
+@Composable
+private fun FacePanel(
+    face: CardFace,
+    draft: FaceDraft,
+    active: Boolean,
+    tool: DrawTool,
     penColor: Color,
     penWidth: Float,
-    editMode: EditMode,
-    onPenColorChange: (Color) -> Unit,
-    onPenWidthChange: (Float) -> Unit,
-    onEditModeChange: (EditMode) -> Unit,
-    onInsertBase: () -> Unit,
-    onBackToKey: () -> Unit,
+    markdownRenderer: MarkdownLayerRenderer,
+    onSelect: () -> Unit,
+    modifier: Modifier,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            ModeChips(editMode = editMode, onEditModeChange = onEditModeChange, modifier = Modifier.weight(1.15f))
-            OutlinedButton(onClick = onInsertBase, modifier = Modifier.weight(0.85f)) {
-                Text("底图")
+    val borderColor = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(face.label, style = MaterialTheme.typography.titleSmall)
+        BoxWithConstraints(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentAlignment = Alignment.Center,
+        ) {
+            val widthFromHeight = maxHeight * DrawingCanvasSpec.aspectRatio
+            val canvasModifier = if (widthFromHeight <= maxWidth) {
+                Modifier.height(maxHeight).width(widthFromHeight)
+            } else {
+                Modifier.width(maxWidth).aspectRatio(DrawingCanvasSpec.aspectRatio)
             }
-            OutlinedButton(onClick = onBackToKey, modifier = Modifier.weight(0.75f)) {
-                Text("key")
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            ColorChoices(penColor = penColor, onPenColorChange = onPenColorChange, modifier = Modifier.weight(1f))
-            Column(modifier = Modifier.weight(1f)) {
-                Text("笔刷 ${penWidth.toInt()}", style = MaterialTheme.typography.labelSmall)
-                Slider(value = penWidth, onValueChange = onPenWidthChange, valueRange = 2f..24f, modifier = Modifier.height(30.dp))
-            }
-        }
-    }
-}
-
-@Composable
-private fun ModeChips(
-    editMode: EditMode,
-    onEditModeChange: (EditMode) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        FilterChip(selected = editMode == EditMode.Draw, onClick = { onEditModeChange(EditMode.Draw) }, label = { Text("绘制") })
-        FilterChip(selected = editMode == EditMode.Move, onClick = { onEditModeChange(EditMode.Move) }, label = { Text("移动") })
-    }
-}
-
-@Composable
-private fun ColorChoices(
-    penColor: Color,
-    onPenColorChange: (Color) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val colorOptions = listOf(Color(0xFF16352E), Color(0xFFC23B22), Color(0xFF2B5EAA), Color(0xFF7B4BA3))
-    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        colorOptions.forEach { color ->
-            OutlinedButton(
-                onClick = { onPenColorChange(color) },
-                shape = CircleShape,
-                modifier = Modifier.size(38.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(4.dp),
-                border = if (color == penColor) {
-                    androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
-                } else {
-                    null
-                },
+            Box(
+                modifier = canvasModifier.border(2.dp, borderColor, RoundedCornerShape(7.dp)).clip(RoundedCornerShape(7.dp)),
             ) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    drawCircle(color)
+                if (draft.markdownEditing.value) {
+                    OutlinedTextField(
+                        value = draft.markdownSource.value,
+                        onValueChange = { draft.markdownSource.value = it },
+                        modifier = Modifier.fillMaxSize(),
+                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        placeholder = { Text("# 标题\n\n${'$'}E = mc^2${'$'}\n\n| 列 | 值 |\n|---|---|\n| A | 1 |") },
+                    )
+                } else {
+                    FaceCanvas(draft, tool, penColor, penWidth, markdownRenderer, onSelect, Modifier.fillMaxSize())
                 }
             }
         }
@@ -448,224 +378,235 @@ private fun ColorChoices(
 }
 
 @Composable
-private fun BottomActions(
-    onUndo: () -> Unit,
-    onClear: () -> Unit,
-    onSave: () -> Unit,
-) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-        OutlinedButton(onClick = onUndo, modifier = Modifier.weight(1f)) {
-            Text("撤销")
-        }
-        OutlinedButton(onClick = onClear, modifier = Modifier.weight(1f)) {
-            Text("清空")
-        }
-        Button(onClick = onSave, modifier = Modifier.weight(1f)) {
-            Text("保存")
-        }
-    }
-}
-
-@Composable
-private fun DrawingCanvas(
-    strokes: MutableList<DrawingStroke>,
-    currentPoints: MutableList<StrokePoint>,
+private fun FaceCanvas(
+    draft: FaceDraft,
+    tool: DrawTool,
     penColor: Color,
     penWidth: Float,
-    editMode: EditMode,
-    camera: CanvasCamera?,
-    baseBitmap: Bitmap?,
-    baseImageRect: CanvasRect?,
-    onCameraChange: (CanvasCamera) -> Unit,
-    onSizeChange: (IntSize) -> Unit,
-    modifier: Modifier = Modifier,
+    markdownRenderer: MarkdownLayerRenderer,
+    onActivate: () -> Unit,
+    modifier: Modifier,
 ) {
-    val shape = RoundedCornerShape(8.dp)
-    val activeCamera = camera
-    val latestCamera by rememberUpdatedState(camera)
-    val latestOnCameraChange by rememberUpdatedState(onCameraChange)
-    var activeStrokeWidth by remember { mutableFloatStateOf(penWidth) }
-    val pointerModifier = when (editMode) {
-        EditMode.Draw -> Modifier.pointerInput(activeCamera, penColor, penWidth) {
-            if (activeCamera == null) return@pointerInput
-            fun toModel(position: Offset): Offset = activeCamera.screenToWorld(position)
-            detectDragGestures(
-                onDragStart = {
-                    currentPoints.clear()
-                    activeStrokeWidth = penWidth / activeCamera.scale
-                    currentPoints += StrokePoint(toModel(it))
-                },
-                onDrag = { change, _ ->
-                    if (change.positionChange() != Offset.Zero) {
-                        currentPoints += StrokePoint(toModel(change.position))
-                    }
-                    change.consume()
-                },
-                onDragEnd = {
-                    if (currentPoints.size >= 2) {
-                        strokes += DrawingStroke(currentPoints.toList(), penColor, activeStrokeWidth)
-                    }
-                    currentPoints.clear()
-                },
-            )
-        }
-        EditMode.Move -> Modifier.pointerInput(editMode) {
-            awaitEachGesture {
-                awaitFirstDown(requireUnconsumed = false)
-                var gestureCamera = latestCamera ?: return@awaitEachGesture
-                var hasPressedPointers: Boolean
-                do {
-                    val event = awaitPointerEvent()
-                    val centroid = event.calculateCentroid(useCurrent = true)
-                    val pan = event.calculatePan()
-                    val zoom = event.calculateZoom()
-                    if (centroid.x.isFinite() && centroid.y.isFinite() && (pan != Offset.Zero || zoom != 1f)) {
-                        gestureCamera = gestureCamera.transform(
-                            centroidX = centroid.x,
-                            centroidY = centroid.y,
-                            panX = pan.x,
-                            panY = pan.y,
-                            zoomFactor = zoom,
-                        )
-                        latestOnCameraChange(gestureCamera)
-                    }
-                    event.changes.forEach { change ->
-                        if (change.pressed) change.consume()
-                    }
-                    hasPressedPointers = event.changes.any { it.pressed }
-                } while (hasPressedPointers)
-            }
+    val baseBytes = draft.baseImageBytes.value
+    val baseBitmap = remember(baseBytes) { baseBytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) ?: error("底图无法解码") } }
+    DisposableEffect(baseBitmap) { onDispose { baseBitmap?.takeUnless(Bitmap::isRecycled)?.recycle() } }
+    val size = draft.viewport.value
+    val markdownBitmap = remember(draft.markdownSource.value, size) {
+        if (size.width > 0 && size.height > 0) markdownRenderer.render(draft.markdownSource.value, size.width, size.height) else null
+    }
+    DisposableEffect(markdownBitmap) { onDispose { markdownBitmap?.takeUnless(Bitmap::isRecycled)?.recycle() } }
+    LaunchedEffect(size) {
+        if (size.width > 0 && size.height > 0) {
+            draft.camera.value = draft.camera.value?.withViewport(size.width.toFloat(), size.height.toFloat())
+                ?: CanvasCamera.initial(size.width.toFloat(), size.height.toFloat())
         }
     }
-
+    val activeCamera = draft.camera.value
+    val latestCamera by rememberUpdatedState(draft.camera.value)
+    val pointerModifier = when (tool) {
+        DrawTool.Pen -> immediateStrokeInput(draft, penColor, penWidth, latestCamera, onActivate)
+        DrawTool.Eraser -> immediateEraserInput(draft, latestCamera, onActivate)
+        DrawTool.Move -> moveInput(draft, latestCamera, onActivate)
+        DrawTool.Markdown -> activateOnlyInput(onActivate)
+    }
     Canvas(
-        modifier = modifier
-            .background(Color(0xFFF8FAF9), shape)
-            .border(1.dp, MaterialTheme.colorScheme.outline, shape)
-            .clip(shape)
-            .onSizeChanged(onSizeChange)
-            .then(pointerModifier),
+        modifier = modifier.background(Color.White).onSizeChanged { draft.viewport.value = it }.then(pointerModifier),
     ) {
         clipRect {
-            drawRect(Color.White, size = size)
-            if (activeCamera != null) {
-                drawBaseImage(baseBitmap, baseImageRect, activeCamera)
-                strokes.forEach { drawStroke(it, activeCamera) }
-                drawStroke(DrawingStroke(currentPoints.toList(), penColor, activeStrokeWidth), activeCamera)
-            }
+            if (activeCamera == null) return@clipRect
+            drawBasePreview(baseBitmap, draft.baseImageRect.value, activeCamera)
+            markdownBitmap?.let { drawImage(it.asImageBitmap()) }
+            draft.strokes.forEach { drawStrokePreview(it, activeCamera) }
+            drawStrokePreview(FaceStroke(draft.currentPoints.toList(), penColor, penWidth / activeCamera.scale), activeCamera)
         }
     }
 }
 
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawBaseImage(
-    baseBitmap: Bitmap?,
-    worldRect: CanvasRect?,
-    camera: CanvasCamera,
-) {
-    if (baseBitmap == null || worldRect == null) return
-    val rect = camera.worldToScreen(worldRect)
-    drawImage(
-        image = baseBitmap.asImageBitmap(),
-        dstOffset = IntOffset(rect.left.toInt(), rect.top.toInt()),
-        dstSize = IntSize(rect.width.toInt(), rect.height.toInt()),
-    )
+private fun immediateStrokeInput(
+    draft: FaceDraft,
+    penColor: Color,
+    penWidth: Float,
+    latestCamera: CanvasCamera?,
+    onActivate: () -> Unit,
+): Modifier = Modifier.pointerInput(draft, penColor, penWidth, latestCamera) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false)
+        onActivate()
+        val camera = latestCamera ?: return@awaitEachGesture
+        draft.currentPoints.clear()
+        fun appendPoint(position: Offset) {
+            val world = camera.screenToWorld(position)
+            if (draft.currentPoints.lastOrNull()?.position != world) draft.currentPoints += FacePoint(world)
+        }
+        appendPoint(down.position)
+        val width = penWidth / camera.scale
+        while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            change.historical.forEach { sample -> appendPoint(sample.position) }
+            appendPoint(change.position)
+            if (change.changedToUp()) {
+                draft.strokes += FaceStroke(draft.currentPoints.toList(), penColor, width)
+                draft.currentPoints.clear()
+                change.consume()
+                break
+            }
+            if (change.pressed) change.consume()
+        }
+    }
 }
 
-private fun CanvasCamera.screenToWorld(point: Offset): Offset = Offset(
-    x = centerX + (point.x - viewportWidth / 2f) / scale,
-    y = centerY + (point.y - viewportHeight / 2f) / scale,
-)
-
-private fun CanvasCamera.worldToScreen(point: Offset): Offset = Offset(
-    x = viewportWidth / 2f + (point.x - centerX) * scale,
-    y = viewportHeight / 2f + (point.y - centerY) * scale,
-)
-
-private fun CanvasCamera.worldToScreen(rect: CanvasRect): CanvasRect {
-    val topLeft = worldToScreen(Offset(rect.left, rect.top))
-    return CanvasRect(topLeft.x, topLeft.y, rect.width * scale, rect.height * scale)
+private fun immediateEraserInput(
+    draft: FaceDraft,
+    latestCamera: CanvasCamera?,
+    onActivate: () -> Unit,
+): Modifier = Modifier.pointerInput(draft, latestCamera) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false)
+        onActivate()
+        val camera = latestCamera ?: return@awaitEachGesture
+        fun erase(position: Offset) {
+            val point = camera.screenToWorld(position)
+            draft.strokes.removeAll { stroke -> stroke.points.any { hypot(it.position.x - point.x, it.position.y - point.y) <= stroke.width * 1.5f } }
+        }
+        erase(down.position)
+        while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            erase(change.position)
+            if (change.changedToUp()) { change.consume(); break }
+            if (change.pressed) change.consume()
+        }
+    }
 }
 
-private fun fitImageInVisibleWorld(
-    imageWidth: Int,
-    imageHeight: Int,
-    camera: CanvasCamera?,
-): CanvasRect {
-    require(imageWidth > 0 && imageHeight > 0) { "底图尺寸必须大于 0" }
-    val centerX = camera?.centerX ?: DrawingCanvasSpec.width / 2f
-    val centerY = camera?.centerY ?: DrawingCanvasSpec.height / 2f
-    val availableWidth = (camera?.visibleWidth ?: DrawingCanvasSpec.width.toFloat()) * 0.9f
-    val availableHeight = (camera?.visibleHeight ?: DrawingCanvasSpec.height.toFloat()) * 0.9f
-    val scale = kotlin.math.min(availableWidth / imageWidth, availableHeight / imageHeight)
-    val width = imageWidth * scale
-    val height = imageHeight * scale
-    return CanvasRect(centerX - width / 2f, centerY - height / 2f, width, height)
+private fun moveInput(
+    draft: FaceDraft,
+    latestCamera: CanvasCamera?,
+    onActivate: () -> Unit,
+): Modifier = Modifier.pointerInput(draft, latestCamera) {
+    awaitEachGesture {
+        awaitFirstDown(requireUnconsumed = false)
+        onActivate()
+        var camera = latestCamera ?: return@awaitEachGesture
+        do {
+            val event = awaitPointerEvent()
+            val centroid = event.calculateCentroid(useCurrent = true)
+            val pan = event.calculatePan()
+            val zoom = event.calculateZoom()
+            if (centroid.x.isFinite() && centroid.y.isFinite() && (pan != Offset.Zero || zoom != 1f)) {
+                camera = camera.transform(centroid.x, centroid.y, pan.x, pan.y, zoom)
+                draft.camera.value = camera
+            }
+            event.changes.forEach { if (it.pressed) it.consume() }
+        } while (event.changes.any { it.pressed })
+    }
 }
 
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawStroke(
-    stroke: DrawingStroke,
-    camera: CanvasCamera,
-) {
-    if (stroke.points.size < 2) return
+private fun activateOnlyInput(onActivate: () -> Unit): Modifier = Modifier.pointerInput(onActivate) {
+    awaitEachGesture {
+        awaitFirstDown(requireUnconsumed = false)
+        onActivate()
+    }
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawBasePreview(bitmap: Bitmap?, rect: CanvasRect?, camera: CanvasCamera) {
+    if (bitmap == null || rect == null) return
+    val target = camera.worldToScreen(rect)
+    if (target.width < 1f || target.height < 1f) return
+    drawImage(bitmap.asImageBitmap(), IntOffset(target.left.toInt(), target.top.toInt()), IntSize(target.width.toInt(), target.height.toInt()))
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawStrokePreview(stroke: FaceStroke, camera: CanvasCamera) {
+    if (stroke.points.isEmpty()) return
+    if (stroke.points.size == 1) {
+        val point = camera.worldToScreen(stroke.points.single().position)
+        drawCircle(stroke.color, stroke.width * camera.scale / 2f, point)
+        return
+    }
     val path = Path().apply {
         camera.worldToScreen(stroke.points.first().position).let { moveTo(it.x, it.y) }
-        stroke.points.drop(1).forEach { point ->
-            camera.worldToScreen(point.position).let { lineTo(it.x, it.y) }
-        }
+        stroke.points.drop(1).forEach { camera.worldToScreen(it.position).let { point -> lineTo(point.x, point.y) } }
     }
-    drawPath(path, stroke.color, style = Stroke(width = stroke.width * camera.scale, cap = StrokeCap.Round))
+    drawPath(path, stroke.color, style = Stroke(stroke.width * camera.scale, cap = StrokeCap.Round))
 }
 
-private fun renderCanvasPng(
-    strokes: List<DrawingStroke>,
-    baseBitmap: Bitmap?,
-    baseImageRect: CanvasRect?,
-    camera: CanvasCamera,
-    backgroundColor: Color,
-): ByteArray {
-    require(strokes.isNotEmpty() || baseBitmap != null) { "图片 value 需要笔迹或底图" }
-
-    val bitmap = Bitmap.createBitmap(CardCanvasSpec.exportWidth, CardCanvasSpec.exportHeight, Bitmap.Config.ARGB_8888)
-    val canvas = AndroidCanvas(bitmap)
-    canvas.drawColor(backgroundColor.toArgb())
-    val exportScale = CardCanvasSpec.exportWidth / camera.visibleWidth
-    val exportCamera = CanvasCamera(
-        scale = exportScale,
-        offsetX = camera.offsetX,
-        offsetY = camera.offsetY,
-        viewportWidth = CardCanvasSpec.exportWidth.toFloat(),
-        viewportHeight = CardCanvasSpec.exportHeight.toFloat(),
-    )
-    if (baseBitmap != null && baseImageRect != null) {
-        val rect = exportCamera.worldToScreen(baseImageRect)
-        canvas.drawBitmap(
-            baseBitmap,
-            null,
-            RectF(rect.left, rect.top, rect.left + rect.width, rect.top + rect.height),
-            Paint(Paint.ANTI_ALIAS_FLAG),
+private fun renderFacePng(draft: FaceDraft, markdownRenderer: MarkdownLayerRenderer): ByteArray {
+    val camera = requireNotNull(draft.camera.value) { "画布相机尚未初始化" }
+    val base = draft.baseImageBytes.value?.let { BitmapFactory.decodeByteArray(it, 0, it.size) ?: error("底图无法解码") }
+    try {
+        val bitmap = Bitmap.createBitmap(DrawingCanvasSpec.width, DrawingCanvasSpec.height, Bitmap.Config.ARGB_8888)
+        val canvas = AndroidCanvas(bitmap)
+        canvas.drawColor(android.graphics.Color.WHITE)
+        val exportScale = DrawingCanvasSpec.width / camera.visibleWidth
+        val exportCamera = CanvasCamera(
+            scale = exportScale,
+            offsetX = camera.offsetX,
+            offsetY = camera.offsetY,
+            viewportWidth = DrawingCanvasSpec.width.toFloat(),
+            viewportHeight = DrawingCanvasSpec.height.toFloat(),
         )
-    }
-    strokes.forEach { stroke ->
-        if (stroke.points.size >= 2) {
-            val path = AndroidPath().apply {
-                exportCamera.worldToScreen(stroke.points.first().position).let { moveTo(it.x, it.y) }
-                stroke.points.drop(1).forEach { point ->
-                    exportCamera.worldToScreen(point.position).let { lineTo(it.x, it.y) }
-                }
-            }
-            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = stroke.color.toArgb()
-                style = Paint.Style.STROKE
-                strokeCap = Paint.Cap.ROUND
-                strokeJoin = Paint.Join.ROUND
-                strokeWidth = stroke.width * exportCamera.scale
-            }
-            canvas.drawPath(path, paint)
+        drawBaseExport(canvas, base, draft.baseImageRect.value, exportCamera)
+        markdownRenderer.render(draft.markdownSource.value, DrawingCanvasSpec.width, DrawingCanvasSpec.height)?.let { markdown ->
+            canvas.drawBitmap(markdown, 0f, 0f, null)
+            markdown.recycle()
         }
+        draft.strokes.forEach { drawStrokeExport(canvas, it, exportCamera) }
+        return try {
+            ByteArrayOutputStream().use { output ->
+                check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "PNG 编码失败" }
+                output.toByteArray()
+            }
+        } finally {
+            bitmap.recycle()
+        }
+    } finally {
+        base?.recycle()
     }
+}
 
-    return ByteArrayOutputStream().use { output ->
-        check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "PNG 编码失败" }
-        output.toByteArray()
+private fun drawBaseExport(canvas: AndroidCanvas, bitmap: Bitmap?, rect: CanvasRect?, camera: CanvasCamera) {
+    if (bitmap == null || rect == null) return
+    val target = camera.worldToScreen(rect)
+    canvas.drawBitmap(bitmap, null, RectF(target.left, target.top, target.right, target.bottom), Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+}
+
+private fun drawStrokeExport(canvas: AndroidCanvas, stroke: FaceStroke, camera: CanvasCamera) {
+    if (stroke.points.isEmpty()) return
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = stroke.color.toArgb(); style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; strokeWidth = stroke.width * camera.scale
     }
+    if (stroke.points.size == 1) {
+        val point = camera.worldToScreen(stroke.points.single().position)
+        canvas.drawCircle(point.x, point.y, paint.strokeWidth / 2f, paint.apply { style = Paint.Style.FILL })
+        return
+    }
+    val path = AndroidPath().apply {
+        camera.worldToScreen(stroke.points.first().position).let { moveTo(it.x, it.y) }
+        stroke.points.drop(1).forEach { camera.worldToScreen(it.position).let { point -> lineTo(point.x, point.y) } }
+    }
+    canvas.drawPath(path, paint)
+}
+
+private fun CanvasCamera.screenToWorld(point: Offset): Offset = Offset(centerX + (point.x - viewportWidth / 2f) / scale, centerY + (point.y - viewportHeight / 2f) / scale)
+private fun CanvasCamera.worldToScreen(point: Offset): Offset = Offset(viewportWidth / 2f + (point.x - centerX) * scale, viewportHeight / 2f + (point.y - centerY) * scale)
+private fun CanvasCamera.worldToScreen(rect: CanvasRect): CanvasRect {
+    val origin = worldToScreen(Offset(rect.left, rect.top))
+    return CanvasRect(origin.x, origin.y, rect.width * scale, rect.height * scale)
+}
+
+private fun fitImageInVisibleWorld(imageWidth: Int, imageHeight: Int, camera: CanvasCamera?): CanvasRect {
+    val active = camera ?: return CanvasRect(0f, 0f, imageWidth.toFloat(), imageHeight.toFloat())
+    val scale = minOf(active.visibleWidth * 0.9f / imageWidth, active.visibleHeight * 0.9f / imageHeight)
+    val width = imageWidth * scale
+    val height = imageHeight * scale
+    return CanvasRect(active.centerX - width / 2f, active.centerY - height / 2f, width, height)
+}
+
+private val CardFace.label: String get() = if (this == CardFace.Front) "正面" else "背面"
+
+private fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }

@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [
@@ -12,7 +14,7 @@ import androidx.room.RoomDatabase
         ReviewStateEntity::class,
         PendingImageDeletionEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class MutsumiCardDatabase : RoomDatabase() {
@@ -20,13 +22,18 @@ abstract class MutsumiCardDatabase : RoomDatabase() {
 
     companion object {
         private const val DATABASE_NAME = "mutsumi-card.db"
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE cards ADD COLUMN frontImagePath TEXT DEFAULT NULL")
+            }
+        }
 
         fun build(context: Context): MutsumiCardDatabase =
             Room.databaseBuilder(
                 context.applicationContext,
                 MutsumiCardDatabase::class.java,
                 DATABASE_NAME,
-            ).build()
+            ).addMigrations(MIGRATION_1_2).build()
 
         fun inMemory(context: Context): MutsumiCardDatabase =
             Room.inMemoryDatabaseBuilder(
@@ -34,4 +41,5 @@ abstract class MutsumiCardDatabase : RoomDatabase() {
                 MutsumiCardDatabase::class.java,
             ).build()
     }
+
 }

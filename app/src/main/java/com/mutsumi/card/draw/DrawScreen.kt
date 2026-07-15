@@ -367,7 +367,7 @@ private fun FacePanel(
                         onValueChange = { draft.markdownSource.value = it },
                         modifier = Modifier.fillMaxSize(),
                         textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                        placeholder = { Text("# 标题\n\n$E = mc^2$\n\n| 列 | 值 |\n|---|---|\n| A | 1 |") },
+                        placeholder = { Text("# 标题\n\n${'$'}E = mc^2${'$'}\n\n| 列 | 值 |\n|---|---|\n| A | 1 |") },
                     )
                 } else {
                     FaceCanvas(draft, tool, penColor, penWidth, markdownRenderer, onSelect, Modifier.fillMaxSize())

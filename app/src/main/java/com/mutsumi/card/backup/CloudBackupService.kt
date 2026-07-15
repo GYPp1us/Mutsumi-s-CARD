@@ -178,7 +178,12 @@ class RepositoryCloudBackupOperations(
         } catch (error: BackupFormatException) {
             throw CloudBackupException("云端快照无效：${error.message}", error)
         }
-        val expectedPaths = document.snapshot.cards.map { it.valueImagePath }.toSet()
+        val expectedPaths = document.snapshot.cards.flatMapTo(mutableSetOf()) { card ->
+            buildList {
+                add(card.valueImagePath)
+                card.frontImagePath?.let(::add)
+            }
+        }
         val actualPaths = document.images.map { it.localPath }
         if (actualPaths.toSet() != expectedPaths || actualPaths.size != expectedPaths.size) {
             throw CloudBackupException("云端快照图片引用不完整")
@@ -197,6 +202,7 @@ class RepositoryCloudBackupOperations(
                 deckId = card.deckId,
                 keyText = card.keyText,
                 archived = card.archived,
+                frontImageSha256 = card.frontImagePath?.let { requireNotNull(images[it]) },
                 imageSha256 = requireNotNull(images[card.valueImagePath]),
             )
             card.id to sha256(json.encodeToString(fingerprint).encodeToByteArray())
@@ -251,6 +257,7 @@ private data class CloudCardFingerprint(
     val deckId: Long,
     val keyText: String,
     val archived: Boolean,
+    val frontImageSha256: String?,
     val imageSha256: String,
 )
 

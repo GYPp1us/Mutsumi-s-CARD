@@ -64,10 +64,26 @@ class RoomCardRepository(
     }
 
     override suspend fun saveCard(deckId: Long, keyText: String, png: ByteArray): Long {
+        return saveCard(deckId, keyText, frontPng = null, backPng = png)
+    }
+
+    override suspend fun saveCard(
+        deckId: Long,
+        keyText: String,
+        frontPng: ByteArray?,
+        backPng: ByteArray,
+    ): Long {
         val normalizedKey = requireText(keyText, "key 不能为空")
-        pngValidator.validate(png)
+        frontPng?.let(pngValidator::validate)
+        pngValidator.validate(backPng)
         requireNotNull(dao.getDeck(deckId)) { "卡组不存在：$deckId" }
-        val path = imageStore.writePng(png)
+        val frontPath = frontPng?.let { imageStore.writePng(it) }
+        val backPath = try {
+            imageStore.writePng(backPng)
+        } catch (error: Exception) {
+            frontPath?.let { deleteNewImageAfterFailure(it, error) }
+            throw error
+        }
         val timestamp = now()
         return withContext(NonCancellable) {
             try {
@@ -75,13 +91,15 @@ class RoomCardRepository(
                     CardEntity(
                         deckId = deckId,
                         keyText = normalizedKey,
-                        valueImagePath = path,
+                        frontImagePath = frontPath,
+                        valueImagePath = backPath,
                         createdAt = timestamp,
                         updatedAt = timestamp,
                     ),
                 )
             } catch (error: Exception) {
-                deleteNewImageAfterFailure(path, error)
+                deleteNewImageAfterFailure(backPath, error)
+                frontPath?.let { deleteNewImageAfterFailure(it, error) }
                 throw error
             }
         }
@@ -166,6 +184,7 @@ class RoomCardRepository(
         id = row.card.id,
         deckId = row.card.deckId,
         keyText = row.card.keyText,
+        frontImagePath = row.card.frontImagePath,
         valueImagePath = row.card.valueImagePath,
         archived = row.card.archived,
         review = ReviewState(

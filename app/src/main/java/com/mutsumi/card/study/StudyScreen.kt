@@ -89,6 +89,7 @@ fun StudyScreen(
         val context = LocalContext.current
         val screenWidthPx = with(density) { maxWidth.toPx() }
         val screenHeightPx = with(density) { maxHeight.toPx() }
+        val interactionSpanPx = minOf(screenWidthPx, screenHeightPx).coerceAtLeast(1f)
         val minimumFlingVelocity = max(
             android.view.ViewConfiguration.get(context).scaledMinimumFlingVelocity.toFloat(),
             with(density) { 600.dp.toPx() },
@@ -99,9 +100,9 @@ fun StudyScreen(
         )
         val maximumFlingVelocity = android.view.ViewConfiguration.get(context)
             .scaledMaximumFlingVelocity.toFloat()
-        val policy = remember(cardSize, screenWidthPx, screenHeightPx) {
+        val policy = remember(cardSize, interactionSpanPx, screenHeightPx) {
             StudyGesturePolicy(
-                screenWidth = screenWidthPx.coerceAtLeast(1f),
+                screenWidth = interactionSpanPx,
                 screenHeight = screenHeightPx.coerceAtLeast(1f),
                 cardWidth = cardSize.width.coerceAtLeast(1).toFloat(),
                 cardHeight = cardSize.height.coerceAtLeast(1).toFloat(),
@@ -372,11 +373,20 @@ private fun PhysicalStudyCard(
                             .fillMaxSize(),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text(
-                            text = card.keyText,
-                            style = MaterialTheme.typography.headlineMedium,
-                            fontWeight = FontWeight.Bold,
-                        )
+                        val frontImagePath = card.frontImagePath
+                        if (frontImagePath == null) {
+                            Text(
+                                text = card.keyText,
+                                style = MaterialTheme.typography.headlineMedium,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        } else {
+                            CardValueImage(
+                                card = card.copy(valueImagePath = frontImagePath),
+                                imageRoot = imageRoot,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
                     }
                     Box(
                         modifier = Modifier

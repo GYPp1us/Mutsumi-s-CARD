@@ -28,7 +28,12 @@ class BackupService(
         exportedAt: Long,
     ) = withContext(Dispatchers.IO) {
         validateSnapshot(snapshot)
-        val referencedImages = snapshot.cards.map { it.valueImagePath }.toSet()
+        val referencedImages = snapshot.cards.flatMap { card ->
+            buildList {
+                add(card.valueImagePath)
+                card.frontImagePath?.let(::add)
+            }
+        }.toSet()
         if (images.keys != referencedImages) throw BackupFormatException("导出图片必须与数据库引用完全一致")
         images.forEach { (path, file) ->
             requireSafeImagePath(path)
@@ -141,8 +146,14 @@ internal fun validateSnapshot(snapshot: BackupSnapshot) {
         if (card.keyText.isBlank()) throw BackupFormatException("卡片 key 不能为空：${card.id}")
         if (card.createdAt < 0 || card.updatedAt < 0) throw BackupFormatException("卡片时间不能为负数")
         requireSafeImagePath(card.valueImagePath)
+        card.frontImagePath?.let(::requireSafeImagePath)
     }
-    val imagePaths = snapshot.cards.map { it.valueImagePath }
+    val imagePaths = snapshot.cards.flatMap { card ->
+        buildList {
+            add(card.valueImagePath)
+            card.frontImagePath?.let(::add)
+        }
+    }
     if (imagePaths.toSet().size != imagePaths.size) throw BackupFormatException("每张卡片必须使用独立图片路径")
     snapshot.reviews.forEach { review ->
         if (review.cardId <= 0) throw BackupFormatException("复习状态 ID 必须为正数")

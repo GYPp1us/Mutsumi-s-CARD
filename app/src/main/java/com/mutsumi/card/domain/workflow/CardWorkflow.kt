@@ -14,6 +14,7 @@ data class MemoryCard(
     val strokeCount: Int,
     val baseImagePath: String? = null,
     val weight: Double = 1.0,
+    val frontImagePath: String? = null,
 )
 
 @Serializable

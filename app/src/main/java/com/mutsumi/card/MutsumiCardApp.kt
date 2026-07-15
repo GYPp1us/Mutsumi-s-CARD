@@ -113,7 +113,12 @@ fun MutsumiCardApp(appContainer: AppContainer) {
                     val deckId = selectedDeckId.takeIf { it > 0 } ?: cardsState.currentDeck?.id
                     requireNotNull(deckId) { "当前没有可用卡组" }
                     scope.launch {
-                        val cardId = appContainer.cardRepository.saveCard(deckId, key, image.pngBytes)
+                val cardId = appContainer.cardRepository.saveCard(
+                    deckId = deckId,
+                    keyText = key,
+                    frontPng = image.frontPngBytes,
+                    backPng = image.backPngBytes,
+                )
                         feedback.show("卡片已保存：$key")
                         selectedName = AppDestination.Study.name
                     }
@@ -134,7 +139,15 @@ private fun StudyDestination(appContainer: AppContainer, deckId: Long, feedback:
     var currentId by rememberSaveable(deckId) { mutableStateOf<Long?>(null) }
     LaunchedEffect(cards) { if (cards.none { it.id == currentId }) currentId = cards.firstOrNull()?.id }
     val legacyCards = cards.map {
-        MemoryCard(it.id, it.keyText, it.valueImagePath, "", 1, weight = it.review.weight)
+        MemoryCard(
+            id = it.id,
+            keyText = it.keyText,
+            valueImagePath = it.valueImagePath,
+            valueDescription = "",
+            strokeCount = 1,
+            weight = it.review.weight,
+            frontImagePath = it.frontImagePath,
+        )
     }
     val imageRoot = cards.firstOrNull()?.let { appContainer.imageStore.resolve(it.valueImagePath).parentFile?.parentFile } ?: File(".")
     StudyScreen(legacyCards, currentId, imageRoot) { cardId, result ->

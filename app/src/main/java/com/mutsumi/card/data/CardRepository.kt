@@ -13,6 +13,7 @@ interface CardRepository {
     suspend fun createDeck(name: String): Long
     suspend fun renameDeck(deckId: Long, name: String)
     suspend fun saveCard(deckId: Long, keyText: String, png: ByteArray): Long
+    suspend fun saveCard(deckId: Long, keyText: String, frontPng: ByteArray?, backPng: ByteArray): Long
     suspend fun updateCard(cardId: Long, keyText: String, png: ByteArray? = null)
     suspend fun archiveCard(cardId: Long)
     suspend fun deleteCard(cardId: Long)

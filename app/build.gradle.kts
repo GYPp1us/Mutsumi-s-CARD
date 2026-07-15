@@ -25,8 +25,8 @@ android {
         applicationId = "com.mutsumi.card"
         minSdk = 26
         targetSdk = 36
-        versionCode = 16
-        versionName = "0.4.6"
+        versionCode = 17
+        versionName = "0.5.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -107,6 +107,9 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("io.noties.markwon:core:4.6.2")
+    implementation("io.noties.markwon:ext-tables:4.6.2")
+    implementation("io.noties.markwon:ext-latex:4.6.2")
 
     ksp("androidx.room:room-compiler:2.8.4")
 

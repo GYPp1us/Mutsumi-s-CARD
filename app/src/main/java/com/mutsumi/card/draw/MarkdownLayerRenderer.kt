@@ -13,10 +13,13 @@ import kotlin.math.roundToInt
 /** Markdown 只绘制文字与表格线，输出 Bitmap 始终保留透明背景。 */
 class MarkdownLayerRenderer(context: Context) {
     private val appContext = context.applicationContext
-    private val markwon = Markwon.builder(appContext)
-        .usePlugin(TablePlugin.create(appContext))
-        .usePlugin(JLatexMathPlugin.create(48f) { builder -> builder.inlinesEnabled(true) })
-        .build()
+    // 空白草稿不需要 Markdown 引擎；保留插件初始化异常，首次实际渲染时直接暴露。
+    private val markwon by lazy(LazyThreadSafetyMode.NONE) {
+        Markwon.builder(appContext)
+            .usePlugin(TablePlugin.create(appContext))
+            .usePlugin(JLatexMathPlugin.create(48f) { builder -> builder.inlinesEnabled(true) })
+            .build()
+    }
 
     fun render(source: String, width: Int, height: Int): Bitmap? {
         if (source.isBlank()) return null

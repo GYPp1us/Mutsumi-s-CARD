@@ -43,6 +43,35 @@ class BackupImporterTest {
     }
 
     @Test
+    fun `双面卡片导入时为正反图片分别生成路径并保留引用`() = runTest {
+        val gateway = RecordingImportGateway()
+        val names = ArrayDeque(listOf("front-new.png", "back-new.png"))
+        val importer = BackupImporter(gateway, idGenerator = sequenceOf(101L, 202L).iterator()::next) {
+            names.removeFirst()
+        }
+        val session = File(temporaryFolder.root, "validated-dual").apply { mkdirs() }
+        val front = File(session, "front.png").apply { writeBytes(byteArrayOf(1)) }
+        val back = File(session, "back.png").apply { writeBytes(byteArrayOf(2)) }
+        val snapshot = fixtureSnapshot().copy(
+            cards = listOf(fixtureSnapshot().cards.single().copy(frontImagePath = "images/front-2.png")),
+        )
+        val archive = ValidatedArchive(
+            session,
+            BackupManifest(2, 1, "0.5.0", 1, 1, 1, 2, emptyList()),
+            snapshot,
+            mapOf("images/front-2.png" to front, "images/value-2.png" to back),
+        )
+
+        archive.use { importer.importCopy(it) }
+
+        val batch = gateway.batch!!
+        val card = batch.snapshot.cards.single()
+        assertThat(card.frontImagePath).isEqualTo("images/front-new.png")
+        assertThat(card.valueImagePath).isEqualTo("images/back-new.png")
+        assertThat(batch.images).containsExactly("images/front-new.png", front, "images/back-new.png", back)
+    }
+
+    @Test
     fun `ID 生成器冲突会在调用网关前失败`() = runTest {
         val gateway = RecordingImportGateway()
         val importer = BackupImporter(gateway, idGenerator = { 7L })

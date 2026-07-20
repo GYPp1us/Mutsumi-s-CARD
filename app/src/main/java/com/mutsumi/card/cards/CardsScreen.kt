@@ -65,6 +65,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.text.font.FontWeight
@@ -432,7 +434,9 @@ fun CardsContextPane(
         return
     }
     var editing by remember(card.id) { mutableStateOf(false) }
-    var draft by remember(card.id) { mutableStateOf(card.keyText) }
+    var draft by remember(card.id) {
+        mutableStateOf(TextFieldValue(card.keyText, selection = TextRange(card.keyText.length)))
+    }
     var confirmDelete by remember(card.id) { mutableStateOf(false) }
     var confirmArchive by remember(card.id) { mutableStateOf(false) }
     var pendingSaveRevision by remember(card.id) { mutableStateOf<Long?>(null) }
@@ -465,10 +469,16 @@ fun CardsContextPane(
                         enabled = !isBusy,
                     )
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = { draft = card.keyText; editing = false }, enabled = !isBusy) { Text("取消") }
+                        TextButton(
+                            onClick = {
+                                draft = TextFieldValue(card.keyText, selection = TextRange(card.keyText.length))
+                                editing = false
+                            },
+                            enabled = !isBusy,
+                        ) { Text("取消") }
                         Button(
-                            onClick = { pendingSaveRevision = keySaveRevision; onSaveKey(draft) },
-                            enabled = draft.isNotBlank() && !isBusy && pendingSaveRevision == null,
+                            onClick = { pendingSaveRevision = keySaveRevision; onSaveKey(draft.text) },
+                            enabled = draft.text.isNotBlank() && !isBusy && pendingSaveRevision == null,
                         ) { Text("保存") }
                     }
                 } else if (compact) {

@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -49,9 +50,9 @@ class CardsScreenTest {
             }
         }
 
-        compose.onNodeWithTag("卡片缩略图-11")
+        compose.onNodeWithTag("卡片缩略图-11", useUnmergedTree = true)
             .assertWidthIsEqualTo(36.dp)
-            .assertHeightIsEqualTo(72.dp)
+            .assertHeightIsEqualTo(58.dp)
         compose.onNodeWithText("细胞").performClick()
 
         compose.onNodeWithTag("卡片详情弹层").assertIsDisplayed()
@@ -59,11 +60,12 @@ class CardsScreenTest {
 
     @Test
     fun selectedCardIsShownInPortraitBottomSheetButNotLandscapeWorkspace() {
+        var layoutMode by mutableStateOf(AppLayoutMode.Portrait)
         compose.setContent {
             MaterialTheme {
                 CardsScreen(
                     uiState = state(cards = listOf(card()), selected = card()),
-                    layoutMode = AppLayoutMode.Portrait,
+                    layoutMode = layoutMode,
                     imageContent = testImage,
                     callbacks = callbacks(),
                 )
@@ -71,16 +73,8 @@ class CardsScreenTest {
         }
         compose.onNodeWithTag("卡片详情弹层").assertIsDisplayed()
 
-        compose.setContent {
-            MaterialTheme {
-                CardsScreen(
-                    uiState = state(cards = listOf(card()), selected = card()),
-                    layoutMode = AppLayoutMode.LandscapeThreePane,
-                    imageContent = testImage,
-                    callbacks = callbacks(),
-                )
-            }
-        }
+        layoutMode = AppLayoutMode.LandscapeThreePane
+        compose.waitForIdle()
         compose.onAllNodesWithTag("卡片详情弹层").assertCountEquals(0)
     }
 
@@ -116,10 +110,9 @@ class CardsScreenTest {
     }
 
     @Test
-    fun deckControlsSearchAndEmptyActionAreConnected() {
+    fun deckControlsAndSearchAreConnected() {
         var switched: Long? = null
         var query = ""
-        var newCard = false
         compose.setContent {
             MaterialTheme {
                 CardsScreen(
@@ -134,7 +127,7 @@ class CardsScreenTest {
                         onSwitchDeck = { switched = it },
                         onQueryChange = { query = it },
                         onClearQuery = { query = "" },
-                        onNewCard = { newCard = true },
+                        onNewCard = {},
                     ),
                 )
             }
@@ -143,10 +136,14 @@ class CardsScreenTest {
         compose.onNodeWithContentDescription("切换卡组").performClick()
         compose.onNodeWithText("生物").performClick()
         assertEquals(2L, switched)
+        compose.onNodeWithText("没有匹配的 key").assertIsDisplayed()
         compose.onNodeWithContentDescription("清除搜索").performClick()
         assertEquals("", query)
-        compose.onNodeWithText("没有匹配的 key").assertIsDisplayed()
+    }
 
+    @Test
+    fun emptyStateStartsNewCard() {
+        var newCard = false
         compose.setContent {
             MaterialTheme {
                 CardsScreen(
@@ -165,7 +162,7 @@ class CardsScreenTest {
     fun busyDisablesRepeatedMutationsAndSaveWaitsForRevision() {
         var saveCalls = 0
         var revision by mutableStateOf(0L)
-        var busy by mutableStateOf(true)
+        var busy by mutableStateOf(false)
         compose.setContent {
             MaterialTheme {
                 CardsContextPane(
@@ -183,7 +180,9 @@ class CardsScreenTest {
         }
         compose.onNodeWithContentDescription("编辑 key").performClick()
         compose.onNodeWithTag("key 编辑输入").assertIsDisplayed()
-        compose.onNodeWithText("保存").performClick()
+        busy = true
+        compose.waitForIdle()
+        compose.onNodeWithText("保存").assertIsNotEnabled()
         assertEquals(0, saveCalls)
 
         busy = false

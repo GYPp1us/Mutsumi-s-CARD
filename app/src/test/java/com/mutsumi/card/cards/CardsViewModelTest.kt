@@ -286,6 +286,12 @@ private class FakeCardRepository : CardRepository {
         deckFlow.value = deckFlow.value.map { if (it.id == deckId) it.copy(name = name) else it }
     }
     override suspend fun saveCard(deckId: Long, keyText: String, png: ByteArray) = 1L
+    override suspend fun saveCard(
+        deckId: Long,
+        keyText: String,
+        frontPng: ByteArray?,
+        backPng: ByteArray,
+    ) = 1L
     override suspend fun updateCard(cardId: Long, keyText: String, png: ByteArray?) {
         updateGate?.await()
         updated = cardId to keyText

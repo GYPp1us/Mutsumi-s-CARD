@@ -112,13 +112,14 @@ fun MutsumiCardApp(appContainer: AppContainer) {
                 AppDestination.Draw -> DrawScreen { key, image ->
                     val deckId = selectedDeckId.takeIf { it > 0 } ?: cardsState.currentDeck?.id
                     requireNotNull(deckId) { "当前没有可用卡组" }
+                    selectedDeckId = deckId
                     scope.launch {
-                val cardId = appContainer.cardRepository.saveCard(
-                    deckId = deckId,
-                    keyText = key,
-                    frontPng = image.frontPngBytes,
-                    backPng = image.backPngBytes,
-                )
+                        appContainer.cardRepository.saveCard(
+                            deckId = deckId,
+                            keyText = key,
+                            frontPng = image.frontPngBytes,
+                            backPng = image.backPngBytes,
+                        )
                         feedback.show("卡片已保存：$key")
                         selectedName = AppDestination.Study.name
                     }

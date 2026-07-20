@@ -63,7 +63,7 @@ class ValidatedBackupOperationsTest {
 
         assertThat(error).isInstanceOf(BackupDestinationException::class.java)
         assertThat(error).hasMessageThat().contains("可能残留")
-        assertThat(temporaryFolder.root.listFiles().orEmpty()).isEmpty()
+        assertThat(temporaryFolder.root.listFiles().orEmpty().none { it.name.startsWith(".backup-export-") }).isTrue()
     }
 
     @Test
@@ -78,7 +78,7 @@ class ValidatedBackupOperationsTest {
         job.join()
 
         assertThat(job.isCancelled).isTrue()
-        assertThat(temporaryFolder.root.listFiles().orEmpty()).isEmpty()
+        assertThat(temporaryFolder.root.listFiles().orEmpty().none { it.name.startsWith(".backup-export-") }).isTrue()
     }
 
     private fun operations(

@@ -20,6 +20,8 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -73,7 +75,10 @@ import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -136,14 +141,38 @@ private class DualFaceDrawingViewModel : ViewModel() {
 fun DrawScreen(onSaveCard: (String, DrawnCardImage) -> String) {
     val session: DualFaceDrawingViewModel = viewModel { DualFaceDrawingViewModel() }
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
     val markdownRenderer = remember(context) { MarkdownLayerRenderer(context) }
     val activity = remember(context) { context.findActivity() }
     var pickerTarget by remember { mutableStateOf<CardFace?>(null) }
 
+    fun setMarkdownEditingFace(face: CardFace?) {
+        session.front.markdownEditing.value = face == CardFace.Front
+        session.back.markdownEditing.value = face == CardFace.Back
+    }
+
+    fun selectFace(face: CardFace) {
+        focusManager.clearFocus(force = true)
+        session.activeFace.value = face
+        if (session.tool.value == DrawTool.Markdown) {
+            setMarkdownEditingFace(face)
+        }
+    }
+
+    fun selectTool(tool: DrawTool) {
+        session.tool.value = tool
+        setMarkdownEditingFace(if (tool == DrawTool.Markdown) session.activeFace.value else null)
+    }
+
     DisposableEffect(activity) {
-        val previous = activity?.requestedOrientation
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        onDispose { activity?.requestedOrientation = previous ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
+        onDispose {
+            // A rotation disposes this composition before the replacement Activity is ready.
+            // Restoring here during that handoff requests portrait again and creates a rotation loop.
+            if (activity != null && !activity.isChangingConfigurations) {
+                activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            }
+        }
     }
 
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -185,8 +214,8 @@ fun DrawScreen(onSaveCard: (String, DrawnCardImage) -> String) {
         modifier = Modifier.fillMaxSize().onPreviewKeyEvent { event ->
             if (event.type == KeyEventType.KeyDown && event.isCtrlPressed && event.key == Key.W) {
                 val draft = session.face(session.activeFace.value)
-                draft.markdownEditing.value = !draft.markdownEditing.value
                 session.tool.value = DrawTool.Markdown
+                setMarkdownEditingFace(if (draft.markdownEditing.value) null else session.activeFace.value)
                 true
             } else {
                 false
@@ -212,10 +241,8 @@ fun DrawScreen(onSaveCard: (String, DrawnCardImage) -> String) {
                 status = session.status.value,
                 markdownEditing = session.face(session.activeFace.value).markdownEditing.value,
                 onKeyChange = { session.keyText.value = it },
-                onToolChange = { tool ->
-                    session.tool.value = tool
-                    if (tool == DrawTool.Markdown) session.face(session.activeFace.value).markdownEditing.value = true
-                },
+                onToolChange = ::selectTool,
+                onFaceChange = ::selectFace,
                 onColorChange = { session.penColor.value = it },
                 onWidthChange = { session.penWidth.floatValue = it },
                 onInsertBase = {
@@ -229,11 +256,11 @@ fun DrawScreen(onSaveCard: (String, DrawnCardImage) -> String) {
                 onClear = { session.face(session.activeFace.value).clear() },
                 onToggleMarkdown = {
                     val draft = session.face(session.activeFace.value)
-                    draft.markdownEditing.value = !draft.markdownEditing.value
                     session.tool.value = DrawTool.Markdown
+                    setMarkdownEditingFace(if (draft.markdownEditing.value) null else session.activeFace.value)
                 },
                 onSave = ::save,
-                modifier = Modifier.width(208.dp).fillMaxHeight(),
+                modifier = Modifier.width(264.dp).fillMaxHeight(),
             )
             FacePanel(
                 face = CardFace.Front,
@@ -243,7 +270,7 @@ fun DrawScreen(onSaveCard: (String, DrawnCardImage) -> String) {
                 penColor = session.penColor.value,
                 penWidth = session.penWidth.floatValue,
                 markdownRenderer = markdownRenderer,
-                onSelect = { session.activeFace.value = CardFace.Front },
+                onSelect = { selectFace(CardFace.Front) },
                 modifier = Modifier.weight(1f).fillMaxHeight(),
             )
             FacePanel(
@@ -254,7 +281,7 @@ fun DrawScreen(onSaveCard: (String, DrawnCardImage) -> String) {
                 penColor = session.penColor.value,
                 penWidth = session.penWidth.floatValue,
                 markdownRenderer = markdownRenderer,
-                onSelect = { session.activeFace.value = CardFace.Back },
+                onSelect = { selectFace(CardFace.Back) },
                 modifier = Modifier.weight(1f).fillMaxHeight(),
             )
         }
@@ -272,6 +299,7 @@ private fun SharedTools(
     markdownEditing: Boolean,
     onKeyChange: (String) -> Unit,
     onToolChange: (DrawTool) -> Unit,
+    onFaceChange: (CardFace) -> Unit,
     onColorChange: (Color) -> Unit,
     onWidthChange: (Float) -> Unit,
     onInsertBase: () -> Unit,
@@ -281,20 +309,36 @@ private fun SharedTools(
     onSave: () -> Unit,
     modifier: Modifier,
 ) {
+    val focusManager = LocalFocusManager.current
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         OutlinedTextField(
             value = keyText,
             onValueChange = onKeyChange,
             label = { Text("文字 key") },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth().height(48.dp),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+            modifier = Modifier.fillMaxWidth().height(48.dp).testTag("draw-key-input"),
         )
-        Text("当前：${activeFace.label}", style = MaterialTheme.typography.labelMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+            FaceChip(
+                label = "正面",
+                selected = activeFace == CardFace.Front,
+                onClick = { onFaceChange(CardFace.Front) },
+                modifier = Modifier.weight(1f).testTag("draw-face-selector-front"),
+            )
+            FaceChip(
+                label = "背面",
+                selected = activeFace == CardFace.Back,
+                onClick = { onFaceChange(CardFace.Back) },
+                modifier = Modifier.weight(1f).testTag("draw-face-selector-back"),
+            )
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
-            ToolChip("笔", tool == DrawTool.Pen) { onToolChange(DrawTool.Pen) }
-            ToolChip("橡", tool == DrawTool.Eraser) { onToolChange(DrawTool.Eraser) }
-            ToolChip("移", tool == DrawTool.Move) { onToolChange(DrawTool.Move) }
-            ToolChip("MD", tool == DrawTool.Markdown) { onToolChange(DrawTool.Markdown) }
+            ToolChip("笔", tool == DrawTool.Pen, Modifier.weight(1f)) { onToolChange(DrawTool.Pen) }
+            ToolChip("橡", tool == DrawTool.Eraser, Modifier.weight(1f)) { onToolChange(DrawTool.Eraser) }
+            ToolChip("移", tool == DrawTool.Move, Modifier.weight(1f)) { onToolChange(DrawTool.Move) }
+            ToolChip("MD", tool == DrawTool.Markdown, Modifier.weight(1f)) { onToolChange(DrawTool.Markdown) }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf(Color(0xFF16352E), Color(0xFFC65F4C), Color(0xFF496F83), Color(0xFFE2B94F)).forEach { color ->
@@ -307,9 +351,9 @@ private fun SharedTools(
         }
         Slider(value = penWidth, onValueChange = onWidthChange, valueRange = 2f..24f, modifier = Modifier.height(32.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-            OutlinedButton(onClick = onInsertBase, modifier = Modifier.weight(1f).height(36.dp)) { Text("插入底图") }
+            OutlinedButton(onClick = onInsertBase, modifier = Modifier.weight(1f).height(36.dp).testTag("draw-insert-base")) { Text("底图") }
             OutlinedButton(onClick = onToggleMarkdown, modifier = Modifier.weight(1f).height(36.dp)) {
-                Text(if (markdownEditing) "预览 Markdown" else "编辑 Markdown")
+                Text(if (markdownEditing) "MD 预览" else "MD 编辑")
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
@@ -324,13 +368,18 @@ private fun SharedTools(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        Button(onClick = onSave, modifier = Modifier.fillMaxWidth().height(40.dp)) { Text("保存卡片") }
+        Button(onClick = onSave, modifier = Modifier.fillMaxWidth().height(40.dp).testTag("save-card")) { Text("保存卡片") }
     }
 }
 
 @Composable
-private fun ToolChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    FilterChip(selected = selected, onClick = onClick, label = { Text(label) })
+private fun ToolChip(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    FilterChip(selected = selected, onClick = onClick, label = { Text(label) }, modifier = modifier.height(40.dp))
+}
+
+@Composable
+private fun FaceChip(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier) {
+    FilterChip(selected = selected, onClick = onClick, label = { Text(label) }, modifier = modifier.height(36.dp))
 }
 
 @Composable
@@ -346,7 +395,7 @@ private fun FacePanel(
     modifier: Modifier,
 ) {
     val borderColor = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
-    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(modifier = modifier.testTag("draw-face-${face.name.lowercase()}"), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(face.label, style = MaterialTheme.typography.titleSmall)
         BoxWithConstraints(
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -365,12 +414,20 @@ private fun FacePanel(
                     OutlinedTextField(
                         value = draft.markdownSource.value,
                         onValueChange = { draft.markdownSource.value = it },
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize().testTag("draw-markdown-${face.name.lowercase()}"),
                         textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                         placeholder = { Text("# 标题\n\n${'$'}E = mc^2${'$'}\n\n| 列 | 值 |\n|---|---|\n| A | 1 |") },
                     )
                 } else {
-                    FaceCanvas(draft, tool, penColor, penWidth, markdownRenderer, onSelect, Modifier.fillMaxSize())
+                    FaceCanvas(
+                        draft = draft,
+                        tool = tool,
+                        penColor = penColor,
+                        penWidth = penWidth,
+                        markdownRenderer = markdownRenderer,
+                        onActivate = onSelect,
+                        modifier = Modifier.fillMaxSize().testTag("drawing-canvas-${face.name.lowercase()}"),
+                    )
                 }
             }
         }

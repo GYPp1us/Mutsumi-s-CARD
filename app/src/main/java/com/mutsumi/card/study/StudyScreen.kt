@@ -35,6 +35,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
@@ -215,7 +216,10 @@ fun StudyScreen(
                     minimumHorizontalFlingVelocity = minimumHorizontalFlingVelocity,
                     maximumFlingVelocity = maximumFlingVelocity,
                     gestureEnabled = returnAnimation?.feedback == null,
-                    modifier = Modifier.width(cardWidth).height(cardWidth / DrawingCanvasSpec.aspectRatio),
+                    modifier = Modifier
+                        .width(cardWidth)
+                        .height(cardWidth / DrawingCanvasSpec.aspectRatio)
+                        .testTag("study-card"),
                 )
             }
         }

@@ -36,8 +36,6 @@ jobs:
 
       - name: 设置 Gradle
         uses: gradle/actions/setup-gradle@v6.2.0
-        with:
-          gradle-version: "9.6.0"
 
       - name: 写入 release 签名文件
         env:
@@ -52,7 +50,7 @@ jobs:
           MUTSUMI_RELEASE_STORE_PASSWORD: ${{ secrets.MUTSUMI_RELEASE_STORE_PASSWORD }}
           MUTSUMI_RELEASE_KEY_ALIAS: ${{ secrets.MUTSUMI_RELEASE_KEY_ALIAS }}
           MUTSUMI_RELEASE_KEY_PASSWORD: ${{ secrets.MUTSUMI_RELEASE_KEY_PASSWORD }}
-        run: gradle :app:assembleRelease
+        run: bash gradlew --no-daemon :app:assembleRelease
 
       - name: 验证 APK 签名和历史证书
         run: |

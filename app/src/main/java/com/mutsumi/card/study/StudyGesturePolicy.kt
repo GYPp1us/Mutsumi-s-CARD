@@ -118,7 +118,7 @@ class StudyGesturePolicy(
 ) {
     private val radius = screenWidth / 5f
     private val flipBand = screenWidth / 10f
-    private val verticalCommit = screenHeight * 0.28f
+    private val verticalCommit = screenHeight / 3f
 
     init {
         require(screenWidth > 0f && screenHeight > 0f) { "屏幕尺寸必须大于 0" }

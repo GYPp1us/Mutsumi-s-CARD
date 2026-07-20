@@ -138,6 +138,7 @@ private fun NavigationRail(
         Spacer(Modifier.height(14.dp))
         AppDestination.entries.forEach { destination ->
             NavigationRailItem(
+                modifier = Modifier.testTag("nav-${destination.name.lowercase()}"),
                 selected = destination == selected,
                 onClick = { onSelect(destination) },
                 icon = { Icon(destination.icon, contentDescription = destination.label) },
@@ -165,7 +166,7 @@ private fun BottomNavigationBar(
     ) {
         AppDestination.entries.forEach { destination ->
             NavigationBarItem(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).testTag("nav-${destination.name.lowercase()}"),
                 selected = destination == selected,
                 onClick = { onSelect(destination) },
                 icon = {

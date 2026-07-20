@@ -6,13 +6,18 @@ import com.mutsumi.card.domain.review.ReviewFeedback
 import kotlinx.coroutines.flow.first
 import java.io.File
 
+interface CloudBackupDataAccess {
+    suspend fun loadExportData(): BackupExportData
+    suspend fun importBatch(batch: ImportBatch): ImportSummary
+}
+
 /** 将公开 Repository 契约装配成可移植备份；导入始终创建新副本。 */
 class RepositoryBackupOperations(
     private val repository: CardRepository,
     private val imageStore: CardImageStore,
     temporaryDirectory: File,
     private val now: () -> Long = System::currentTimeMillis,
-) : BackupOperations {
+) : BackupOperations, CloudBackupDataAccess {
     private val operations = ValidatedBackupOperations(
         snapshotSource = BackupSnapshotSource { loadExportData() },
         service = BackupService(),
@@ -25,7 +30,7 @@ class RepositoryBackupOperations(
 
     override suspend fun import(input: java.io.InputStream): ImportSummary = operations.import(input)
 
-    internal suspend fun loadExportData(): BackupExportData {
+    override suspend fun loadExportData(): BackupExportData {
         val timestamp = now()
         val decks = repository.decks.first()
         val cards = decks.flatMap { repository.cards(it.id).first() }
@@ -55,7 +60,7 @@ class RepositoryBackupOperations(
         )
     }
 
-    internal suspend fun importBatch(batch: ImportBatch): ImportSummary {
+    override suspend fun importBatch(batch: ImportBatch): ImportSummary {
         val deckIds = mutableMapOf<Long, Long>()
         batch.snapshot.decks.forEach { deck -> deckIds[deck.id] = repository.createDeck(deck.name) }
         val cardIds = mutableMapOf<Long, Long>()

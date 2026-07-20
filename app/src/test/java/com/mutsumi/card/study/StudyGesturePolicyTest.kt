@@ -15,7 +15,7 @@ class StudyGesturePolicyTest {
     private val anchor = StudyTouchPoint(500f, 500f)
 
     @Test
-    fun dragInsideQuarterScreenOnlyTiltsWithoutAction() {
+    fun dragInsideInteractionCircleOnlyTiltsWithoutAction() {
         val projection = policy.project(
             anchor = anchor,
             current = StudyTouchPoint(625f, 500f),
@@ -23,23 +23,23 @@ class StudyGesturePolicyTest {
         )
 
         assertThat(projection.physicalState.angle.axisRotationZ).isWithin(0.01f).of(0f)
-        assertThat(projection.physicalState.angle.deflection).isWithin(0.01f).of(6f)
+        assertThat(projection.physicalState.angle.deflection).isWithin(0.01f).of(5.46875f)
         assertThat(projection.physicalState.center.y).isWithin(0.01f).of(0f)
         assertThat(projection.flipProgress).isWithin(0.01f).of(0f)
         assertThat(projection.releaseAction).isNull()
     }
 
     @Test
-    fun rightDragAfterQuarterScreenCarriesTiltIntoFlipBand() {
-        val boundary = policy.project(anchor, StudyTouchPoint(750f, 500f), CardSide.Front)
-        val halfFlip = policy.project(anchor, StudyTouchPoint(800f, 500f), CardSide.Front)
-        val fullFlip = policy.project(anchor, StudyTouchPoint(850f, 500f), CardSide.Front)
+    fun rightDragAfterInteractionCircleCarriesTiltIntoFlipBand() {
+        val boundary = policy.project(anchor, StudyTouchPoint(700f, 500f), CardSide.Front)
+        val halfFlip = policy.project(anchor, StudyTouchPoint(750f, 500f), CardSide.Front)
+        val fullFlip = policy.project(anchor, StudyTouchPoint(800f, 500f), CardSide.Front)
 
         assertThat(boundary.physicalState.angle.axisRotationZ).isWithin(0.01f).of(0f)
-        assertThat(boundary.physicalState.angle.deflection).isWithin(0.01f).of(12f)
+        assertThat(boundary.physicalState.angle.deflection).isWithin(0.01f).of(8f)
         assertThat(halfFlip.flipProgress).isWithin(0.01f).of(0.5f)
-        assertThat(halfFlip.physicalState.angle.deflection).isWithin(0.01f).of(96f)
-        assertThat(halfFlip.releaseAction).isEqualTo(StudyReleaseAction.ToggleSide)
+        assertThat(halfFlip.physicalState.angle.deflection).isWithin(0.01f).of(94f)
+        assertThat(policy.release(halfFlip, 0f, 0f, 600f)).isEqualTo(StudyReleaseAction.ToggleSide)
 
         assertThat(fullFlip.flipProgress).isWithin(0.01f).of(1f)
         assertThat(fullFlip.physicalState.angle.deflection).isWithin(0.01f).of(180f)
@@ -55,12 +55,13 @@ class StudyGesturePolicyTest {
 
     @Test
     fun crossingNinetyDegreesDoesNotCommitUntilReleaseAndCanDragBack() {
-        val crossed = policy.project(anchor, StudyTouchPoint(825f, 500f), CardSide.Front)
-        val draggedBack = policy.project(anchor, StudyTouchPoint(790f, 500f), CardSide.Front)
+        val crossed = policy.project(anchor, StudyTouchPoint(775f, 500f), CardSide.Front)
+        val draggedBack = policy.project(anchor, StudyTouchPoint(740f, 500f), CardSide.Front)
 
-        assertThat(crossed.releaseAction).isEqualTo(StudyReleaseAction.ToggleSide)
+        assertThat(crossed.releaseAction).isNull()
+        assertThat(policy.release(crossed, 0f, 0f, 600f)).isEqualTo(StudyReleaseAction.ToggleSide)
 
-        assertThat(draggedBack.releaseAction).isNull()
+        assertThat(policy.release(draggedBack, 0f, 0f, 600f)).isNull()
     }
 
     @Test
@@ -69,7 +70,7 @@ class StudyGesturePolicyTest {
 
         assertThat(projection.flipProgress).isWithin(0.01f).of(-1f)
         assertThat(projection.physicalState.angle.deflection).isWithin(0.01f).of(0f)
-        assertThat(projection.releaseAction).isEqualTo(StudyReleaseAction.ToggleSide)
+        assertThat(policy.release(projection, 0f, 0f, 600f)).isEqualTo(StudyReleaseAction.ToggleSide)
     }
 
     @Test
@@ -90,7 +91,7 @@ class StudyGesturePolicyTest {
         )
 
         assertThat(front.angle.axisRotationZ).isWithin(0.01f).of(0f)
-        assertThat(front.angle.deflection).isWithin(0.01f).of(6f)
+        assertThat(front.angle.deflection).isWithin(0.01f).of(5.46875f)
         assertThat(back.angle.axisRotationZ).isWithin(0.01f).of(180f)
         assertThat(180f - back.angle.deflection).isWithin(0.01f).of(front.angle.deflection)
     }
@@ -111,16 +112,16 @@ class StudyGesturePolicyTest {
 
         assertThat(projection.physicalState.center.y).isLessThan(-250f)
         assertThat(projection.physicalState.angle.axisRotationZ).isWithin(0.01f).of(-90f)
-        assertThat(projection.physicalState.angle.deflection).isWithin(0.01f).of(32f)
+        assertThat(projection.physicalState.angle.deflection).isWithin(0.01f).of(7f)
     }
 
     @Test
     fun horizontalDragStillAllowsAFullFlipAfterVerticalRollLimit() {
-        val projection = policy.project(anchor, StudyTouchPoint(850f, 500f), CardSide.Front)
+        val projection = policy.project(anchor, StudyTouchPoint(800f, 500f), CardSide.Front)
 
         assertThat(projection.physicalState.angle.axisRotationZ).isWithin(0.01f).of(0f)
         assertThat(projection.physicalState.angle.deflection).isWithin(0.01f).of(180f)
-        assertThat(projection.releaseAction).isEqualTo(StudyReleaseAction.ToggleSide)
+        assertThat(policy.release(projection, 0f, 0f, 600f)).isEqualTo(StudyReleaseAction.ToggleSide)
     }
 
     @Test
@@ -128,8 +129,8 @@ class StudyGesturePolicyTest {
         val justInside = policy.project(anchor, StudyTouchPoint(500f, 101f), CardSide.Front)
         val atThreshold = policy.project(anchor, StudyTouchPoint(500f, 100f), CardSide.Front)
 
-        assertThat(justInside.releaseAction).isNull()
-        assertThat(atThreshold.releaseAction).isEqualTo(StudyReleaseAction.Feedback(ReviewFeedback.Know))
+        assertThat(policy.release(justInside, 0f, 0f, 600f)).isNull()
+        assertThat(policy.release(atThreshold, 0f, 0f, 600f)).isEqualTo(StudyReleaseAction.Feedback(ReviewFeedback.Know))
     }
 
     @Test
@@ -137,8 +138,8 @@ class StudyGesturePolicyTest {
         val justInside = policy.project(anchor, StudyTouchPoint(500f, 899f), CardSide.Front)
         val atThreshold = policy.project(anchor, StudyTouchPoint(500f, 900f), CardSide.Front)
 
-        assertThat(justInside.releaseAction).isNull()
-        assertThat(atThreshold.releaseAction).isEqualTo(StudyReleaseAction.Feedback(ReviewFeedback.Again))
+        assertThat(policy.release(justInside, 0f, 0f, 600f)).isNull()
+        assertThat(policy.release(atThreshold, 0f, 0f, 600f)).isEqualTo(StudyReleaseAction.Feedback(ReviewFeedback.Again))
     }
 
     @Test
@@ -148,7 +149,7 @@ class StudyGesturePolicyTest {
         assertThat(projection.physicalState.center.x).isWithin(0.01f).of(15f)
         assertThat(projection.physicalState.center.y).isLessThan(-250f)
         assertThat(projection.flipProgress).isWithin(0.01f).of(0f)
-        assertThat(projection.releaseAction).isEqualTo(StudyReleaseAction.Feedback(ReviewFeedback.Know))
+        assertThat(policy.release(projection, 0f, 0f, 600f)).isEqualTo(StudyReleaseAction.Feedback(ReviewFeedback.Know))
     }
 
     @Test

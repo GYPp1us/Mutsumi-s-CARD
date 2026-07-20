@@ -12,30 +12,34 @@ import java.io.File
 import java.util.UUID
 
 class RepositoryCloudBackupOperations(
-    private val repositoryOperations: RepositoryBackupOperations,
+    private val repositoryOperations: CloudBackupDataAccess,
     private val temporaryDirectory: File,
     private val client: OkHttpClient = OkHttpClient(),
     private val json: Json = Json { ignoreUnknownKeys = false },
     private val now: () -> Long = System::currentTimeMillis,
     private val idGenerator: () -> String = { UUID.randomUUID().toString() },
+    private val remoteFactory: (CloudBackupConfig) -> CloudRemoteStore = { config -> WebDavClient(config, client) },
 ) : CloudBackupOperations {
     override suspend fun inspect(config: CloudBackupConfig): CloudBackupOverview = withContext(Dispatchers.IO) {
-        val remote = WebDavClient(config, client)
+        val remote = remoteFactory(config)
         val index = loadIndex(remote)
         val current = buildCurrentDocument(repositoryOperations.loadExportData())
         overview(index, current.document, remote)
     }
 
     override suspend fun backup(config: CloudBackupConfig): CloudBackupResult = withContext(Dispatchers.IO) {
-        val remote = WebDavClient(config, client)
+        val remote = remoteFactory(config)
         val index = loadIndex(remote)
         val exportData = repositoryOperations.loadExportData()
         val current = buildCurrentDocument(exportData)
         val currentOverview = overview(index, current.document, remote)
         remote.ensureDirectories()
-        val knownHashes = index.snapshots.flatMapTo(mutableSetOf()) { it.imageHashes }
         current.bytesByHash.forEach { (hash, bytes) ->
-            if (hash !in knownHashes) remote.put("objects/$hash.png", bytes, "image/png")
+            val path = "objects/$hash.png"
+            val existing = remote.get(path)
+            if (existing == null || sha256(existing) != hash) {
+                remote.put(path, bytes, "image/png")
+            }
         }
 
         val createdAt = now()
@@ -73,7 +77,7 @@ class RepositoryCloudBackupOperations(
     override suspend fun restore(config: CloudBackupConfig, snapshotId: String): ImportSummary =
         withContext(Dispatchers.IO) {
             requireSafeSnapshotId(snapshotId)
-            val remote = WebDavClient(config, client)
+            val remote = remoteFactory(config)
             val index = loadIndex(remote)
             if (index.snapshots.none { it.id == snapshotId }) {
                 throw CloudBackupException("云端版本不存在或已超出保留窗口")

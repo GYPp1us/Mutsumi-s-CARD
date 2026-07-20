@@ -36,11 +36,16 @@ class BackupImporter(
         val deckIds = archive.snapshot.decks.associate { it.id to newId() }
         val cardIds = archive.snapshot.cards.associate { it.id to newId() }
         val usedImagePaths = mutableSetOf<String>()
-        val imagePaths = archive.snapshot.cards.associate { card ->
+        val imagePaths = archive.snapshot.cards.flatMap { card ->
+            buildList {
+                card.frontImagePath?.let(::add)
+                add(card.valueImagePath)
+            }
+        }.associateWith {
             val path = "images/${imageNameGenerator()}"
             requireSafeImagePath(path)
             check(usedImagePaths.add(path)) { "导入图片名生成器产生重复路径：$path" }
-            card.valueImagePath to path
+            path
         }
 
         val snapshot = BackupSnapshot(
@@ -50,6 +55,7 @@ class BackupImporter(
                     id = cardIds.getValue(card.id),
                     deckId = deckIds.getValue(card.deckId),
                     valueImagePath = imagePaths.getValue(card.valueImagePath),
+                    frontImagePath = card.frontImagePath?.let(imagePaths::getValue),
                 )
             },
             reviews = archive.snapshot.reviews.map { review ->

@@ -25,8 +25,8 @@ android {
         applicationId = "com.mutsumi.card"
         minSdk = 26
         targetSdk = 36
-        versionCode = 19
-        versionName = "0.6.0"
+        versionCode = 20
+        versionName = "0.6.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -111,6 +111,7 @@ dependencies {
     implementation("io.noties.markwon:core:4.6.2")
     implementation("io.noties.markwon:ext-tables:4.6.2")
     implementation("io.noties.markwon:ext-latex:4.6.2")
+    implementation("io.noties.markwon:inline-parser:4.6.2")
 
     ksp("androidx.room:room-compiler:2.8.4")
 

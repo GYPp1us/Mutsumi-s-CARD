@@ -8,6 +8,7 @@ import android.widget.TextView
 import io.noties.markwon.Markwon
 import io.noties.markwon.ext.latex.JLatexMathPlugin
 import io.noties.markwon.ext.tables.TablePlugin
+import io.noties.markwon.inlineparser.MarkwonInlineParserPlugin
 import kotlin.math.roundToInt
 
 /** Markdown 只绘制文字与表格线，输出 Bitmap 始终保留透明背景。 */
@@ -17,6 +18,7 @@ class MarkdownLayerRenderer(context: Context) {
     private val markwon by lazy(LazyThreadSafetyMode.NONE) {
         Markwon.builder(appContext)
             .usePlugin(TablePlugin.create(appContext))
+            .usePlugin(MarkwonInlineParserPlugin.create())
             .usePlugin(JLatexMathPlugin.create(48f) { builder -> builder.inlinesEnabled(true) })
             .build()
     }
@@ -28,7 +30,7 @@ class MarkdownLayerRenderer(context: Context) {
         val padding = (56f * scale).roundToInt()
         val textView = TextView(appContext).apply {
             setTextColor(Color.rgb(32, 38, 35))
-            setBackgroundColor(Color.TRANSPARENT)
+            background = null
             setPadding(padding, padding, padding, padding)
             textSize = 34f * scale
             includeFontPadding = true

@@ -1,6 +1,6 @@
 # 记忆卡片
 
-安卓端记忆卡片工具。卡片的 key 是文字，value 是图片。当前版本为 `v0.6.0`，提供原生 Android MVP、GitHub CI 和已签名 APK 发布流程。
+安卓端记忆卡片工具。卡片的 key 是文字，value 是图片。当前版本为 `v0.6.1`，提供原生 Android MVP、GitHub CI 和已签名 APK 发布流程。
 
 ## 第一版能力
 

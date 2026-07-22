@@ -7,9 +7,9 @@
 
 ## 当前目标
 
-- 当前开发目标是完成并发布 `v0.6.0`。
-- 当前开发分支：`codex/v0.6.0-landscape-flow`。
-- 当前隔离工作区：`.worktrees/v0.4.0-refactor`。
+- 当前开发目标是完成并发布 `v0.6.1`。
+- 当前开发分支：`codex/v0.6.1-draw-fix`。
+- 当前隔离工作区：`.worktrees/v0.6.1-draw-fix`。
 - 不要在主工作区的 `main` 上直接实现重构。
 - 必须持续推进至 GitHub Release 包含已签名 APK；中间阶段完成不等于目标完成。
 
@@ -81,6 +81,6 @@ $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
 
 - 合并前运行单元测试、lint、AndroidTest 编译、debug APK 构建；有设备/模拟器时运行 connected tests。
 - Release workflow 必须验证 signer SHA-256 与历史签名一致，而不仅是“APK 有签名”。
-- 推送 `v0.6.0` 标签后等待 GitHub Actions 成功，检查 Release APK 和 SHA-256 附件。
+- 推送 `v0.6.1` 标签后等待 GitHub Actions 成功，检查 Release APK 和 SHA-256 附件。
 - 使用 `apksigner` 验证版本、证书；使用 `adb install -r` 或等价方式验证覆盖安装。
 - Obtainium 应可从 GitHub Release 自动检测 `mutsumi-card-release.apk`。

@@ -47,6 +47,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -77,6 +78,8 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsPropertyKey
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -95,6 +98,7 @@ data class DrawnCardImage(
 
 private enum class CardFace { Front, Back }
 private enum class DrawTool { Pen, Eraser, Move, Markdown }
+internal val DrawCameraCenterXKey = SemanticsPropertyKey<Float>("绘图相机中心 X")
 
 private data class FacePoint(val position: Offset)
 private data class FaceStroke(val points: List<FacePoint>, val color: Color, val width: Float)
@@ -152,8 +156,10 @@ fun DrawScreen(onSaveCard: (String, DrawnCardImage) -> String) {
     }
 
     fun selectFace(face: CardFace) {
-        focusManager.clearFocus(force = true)
-        session.activeFace.value = face
+        if (session.activeFace.value != face) {
+            focusManager.clearFocus(force = true)
+            session.activeFace.value = face
+        }
         if (session.tool.value == DrawTool.Markdown) {
             setMarkdownEditingFace(face)
         }
@@ -459,7 +465,7 @@ private fun FaceCanvas(
         }
     }
     val activeCamera = draft.camera.value
-    val latestCamera by rememberUpdatedState(draft.camera.value)
+    val latestCamera = rememberUpdatedState(draft.camera.value)
     val pointerModifier = when (tool) {
         DrawTool.Pen -> immediateStrokeInput(draft, penColor, penWidth, latestCamera, onActivate)
         DrawTool.Eraser -> immediateEraserInput(draft, latestCamera, onActivate)
@@ -467,7 +473,11 @@ private fun FaceCanvas(
         DrawTool.Markdown -> activateOnlyInput(onActivate)
     }
     Canvas(
-        modifier = modifier.background(Color.White).onSizeChanged { draft.viewport.value = it }.then(pointerModifier),
+        modifier = modifier
+            .background(Color.White)
+            .onSizeChanged { draft.viewport.value = it }
+            .semantics { activeCamera?.let { this[DrawCameraCenterXKey] = it.centerX } }
+            .then(pointerModifier),
     ) {
         clipRect {
             if (activeCamera == null) return@clipRect
@@ -483,13 +493,13 @@ private fun immediateStrokeInput(
     draft: FaceDraft,
     penColor: Color,
     penWidth: Float,
-    latestCamera: CanvasCamera?,
+    latestCamera: State<CanvasCamera?>,
     onActivate: () -> Unit,
-): Modifier = Modifier.pointerInput(draft, penColor, penWidth, latestCamera) {
+): Modifier = Modifier.pointerInput(draft, penColor, penWidth) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false)
         onActivate()
-        val camera = latestCamera ?: return@awaitEachGesture
+        val camera = latestCamera.value ?: return@awaitEachGesture
         draft.currentPoints.clear()
         fun appendPoint(position: Offset) {
             val world = camera.screenToWorld(position)
@@ -515,13 +525,13 @@ private fun immediateStrokeInput(
 
 private fun immediateEraserInput(
     draft: FaceDraft,
-    latestCamera: CanvasCamera?,
+    latestCamera: State<CanvasCamera?>,
     onActivate: () -> Unit,
-): Modifier = Modifier.pointerInput(draft, latestCamera) {
+): Modifier = Modifier.pointerInput(draft) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false)
         onActivate()
-        val camera = latestCamera ?: return@awaitEachGesture
+        val camera = latestCamera.value ?: return@awaitEachGesture
         fun erase(position: Offset) {
             val point = camera.screenToWorld(position)
             draft.strokes.removeAll { stroke -> stroke.points.any { hypot(it.position.x - point.x, it.position.y - point.y) <= stroke.width * 1.5f } }
@@ -539,13 +549,13 @@ private fun immediateEraserInput(
 
 private fun moveInput(
     draft: FaceDraft,
-    latestCamera: CanvasCamera?,
+    latestCamera: State<CanvasCamera?>,
     onActivate: () -> Unit,
-): Modifier = Modifier.pointerInput(draft, latestCamera) {
+): Modifier = Modifier.pointerInput(draft) {
     awaitEachGesture {
         awaitFirstDown(requireUnconsumed = false)
         onActivate()
-        var camera = latestCamera ?: return@awaitEachGesture
+        var camera = latestCamera.value ?: return@awaitEachGesture
         do {
             val event = awaitPointerEvent()
             val centroid = event.calculateCentroid(useCurrent = true)

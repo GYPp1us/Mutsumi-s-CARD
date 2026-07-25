@@ -65,6 +65,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -83,7 +85,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -107,6 +108,7 @@ private class FaceDraft {
     val strokes = mutableStateListOf<FaceStroke>()
     val currentPoints = mutableStateListOf<FacePoint>()
     val baseImageBytes = mutableStateOf<ByteArray?>(null)
+    val baseImageSize = mutableStateOf(IntSize.Zero)
     val baseImageRect = mutableStateOf<CanvasRect?>(null)
     val camera = mutableStateOf<CanvasCamera?>(null)
     val viewport = mutableStateOf(IntSize.Zero)
@@ -119,6 +121,7 @@ private class FaceDraft {
         strokes.clear()
         currentPoints.clear()
         baseImageBytes.value = null
+        baseImageSize.value = IntSize.Zero
         baseImageRect.value = null
         markdownSource.value = ""
         markdownEditing.value = false
@@ -189,7 +192,8 @@ fun DrawScreen(onSaveCard: (String, DrawnCardImage) -> String) {
         val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             ?: error("底图不是可解码的图片：$uri")
         val draft = session.face(face)
-        draft.baseImageRect.value = fitImageInVisibleWorld(bitmap.width, bitmap.height, draft.camera.value)
+        draft.baseImageSize.value = IntSize(bitmap.width, bitmap.height)
+        draft.baseImageRect.value = fitImageInCardWorld(bitmap.width, bitmap.height)
         bitmap.recycle()
         draft.baseImageBytes.value = bytes
         session.activeFace.value = face
@@ -462,6 +466,12 @@ private fun FaceCanvas(
         if (size.width > 0 && size.height > 0) {
             draft.camera.value = draft.camera.value?.withViewport(size.width.toFloat(), size.height.toFloat())
                 ?: CanvasCamera.initial(size.width.toFloat(), size.height.toFloat())
+            if (draft.baseImageRect.value == null && draft.baseImageSize.value != IntSize.Zero) {
+                draft.baseImageRect.value = fitImageInCardWorld(
+                    draft.baseImageSize.value.width,
+                    draft.baseImageSize.value.height,
+                )
+            }
         }
     }
     val activeCamera = draft.camera.value
@@ -558,7 +568,7 @@ private fun moveInput(
         var camera = latestCamera.value ?: return@awaitEachGesture
         do {
             val event = awaitPointerEvent()
-            val centroid = event.calculateCentroid(useCurrent = true)
+            val centroid = event.calculateCentroid(useCurrent = false)
             val pan = event.calculatePan()
             val zoom = event.calculateZoom()
             if (centroid.x.isFinite() && centroid.y.isFinite() && (pan != Offset.Zero || zoom != 1f)) {
@@ -581,7 +591,14 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawBasePreview(bit
     if (bitmap == null || rect == null) return
     val target = camera.worldToScreen(rect)
     if (target.width < 1f || target.height < 1f) return
-    drawImage(bitmap.asImageBitmap(), IntOffset(target.left.toInt(), target.top.toInt()), IntSize(target.width.toInt(), target.height.toInt()))
+    drawIntoCanvas { canvas ->
+        canvas.nativeCanvas.drawBitmap(
+            bitmap,
+            null,
+            RectF(target.left, target.top, target.right, target.bottom),
+            Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG),
+        )
+    }
 }
 
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawStrokePreview(stroke: FaceStroke, camera: CanvasCamera) {
@@ -660,14 +677,6 @@ private fun CanvasCamera.worldToScreen(point: Offset): Offset = Offset(viewportW
 private fun CanvasCamera.worldToScreen(rect: CanvasRect): CanvasRect {
     val origin = worldToScreen(Offset(rect.left, rect.top))
     return CanvasRect(origin.x, origin.y, rect.width * scale, rect.height * scale)
-}
-
-private fun fitImageInVisibleWorld(imageWidth: Int, imageHeight: Int, camera: CanvasCamera?): CanvasRect {
-    val active = camera ?: return CanvasRect(0f, 0f, imageWidth.toFloat(), imageHeight.toFloat())
-    val scale = minOf(active.visibleWidth * 0.9f / imageWidth, active.visibleHeight * 0.9f / imageHeight)
-    val width = imageWidth * scale
-    val height = imageHeight * scale
-    return CanvasRect(active.centerX - width / 2f, active.centerY - height / 2f, width, height)
 }
 
 private val CardFace.label: String get() = if (this == CardFace.Front) "正面" else "背面"

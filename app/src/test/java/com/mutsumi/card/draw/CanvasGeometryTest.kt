@@ -86,4 +86,29 @@ class CanvasGeometryTest {
         assertThat(camera.offsetX).isWithin(0.1f).of(1_000_000f)
         assertThat(camera.offsetY).isWithin(0.1f).of(-1_000_000f)
     }
+
+    @Test
+    fun 底图保持卡片坐标比例且不依赖导入时可视区域() {
+        val rect = fitImageInCardWorld(800, 400)
+
+        assertThat(rect).isEqualTo(CanvasRect(0f, 556f, 1024f, 512f))
+    }
+
+    @Test
+    fun 底图矩形与笔迹点经过相机平移后拥有相同屏幕位移() {
+        val camera = CanvasCamera.initial(1000f, 1000f).withZoom(1.2f)
+        val worldX = 240f
+        val worldY = 720f
+        val panX = 37f
+        val panY = -19f
+        val transformed = camera.transform(500f, 500f, panX, panY, 1f)
+
+        val oldScreenX = (worldX - camera.offsetX) * camera.scale
+        val oldScreenY = (worldY - camera.offsetY) * camera.scale
+        val newScreenX = (worldX - transformed.offsetX) * transformed.scale
+        val newScreenY = (worldY - transformed.offsetY) * transformed.scale
+
+        assertThat(newScreenX - oldScreenX).isWithin(0.001f).of(panX)
+        assertThat(newScreenY - oldScreenY).isWithin(0.001f).of(panY)
+    }
 }

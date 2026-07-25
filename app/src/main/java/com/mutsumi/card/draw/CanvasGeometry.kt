@@ -94,7 +94,7 @@ class CanvasCamera private constructor(
         normalized = Unit,
     )
 
-    /** 以当前帧双指质心为不动点，同时应用平移和缩放。 */
+    /** 双指质心使用上一帧位置，平移量将其移动到当前帧。 */
     fun transform(centroidX: Float, centroidY: Float, panX: Float, panY: Float, zoomFactor: Float): CanvasCamera {
         require(centroidX.isFinite() && centroidY.isFinite()) { "缩放质心必须是有限数值" }
         require(panX.isFinite() && panY.isFinite()) { "平移量必须是有限数值" }
@@ -191,3 +191,10 @@ fun fitCenterRect(
         height = height,
     )
 }
+
+fun fitImageInCardWorld(sourceWidth: Int, sourceHeight: Int): CanvasRect = fitCenterRect(
+    sourceWidth = sourceWidth,
+    sourceHeight = sourceHeight,
+    targetWidth = DrawingCanvasSpec.width,
+    targetHeight = DrawingCanvasSpec.height,
+)

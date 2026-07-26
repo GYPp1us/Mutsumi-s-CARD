@@ -14,7 +14,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ReviewStateEntity::class,
         PendingImageDeletionEntity::class,
     ],
-    version = 2,
+    version = 4,
     exportSchema = true,
 )
 abstract class MutsumiCardDatabase : RoomDatabase() {
@@ -27,19 +27,50 @@ abstract class MutsumiCardDatabase : RoomDatabase() {
                 database.execSQL("ALTER TABLE cards ADD COLUMN frontImagePath TEXT DEFAULT NULL")
             }
         }
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE decks ADD COLUMN syncId TEXT NOT NULL DEFAULT ''")
+                database.execSQL("ALTER TABLE cards ADD COLUMN syncId TEXT NOT NULL DEFAULT ''")
+                database.execSQL("UPDATE decks SET syncId = lower(hex(randomblob(16))) WHERE syncId = ''")
+                database.execSQL("UPDATE cards SET syncId = lower(hex(randomblob(16))) WHERE syncId = ''")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_decks_syncId ON decks(syncId)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_cards_syncId ON cards(syncId)")
+                database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_decks_syncId_non_empty ON decks(syncId) WHERE syncId <> ''")
+                database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_cards_syncId_non_empty ON cards(syncId) WHERE syncId <> ''")
+            }
+        }
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("DROP INDEX IF EXISTS index_decks_syncId")
+                database.execSQL("DROP INDEX IF EXISTS index_cards_syncId")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_decks_syncId ON decks(syncId)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_cards_syncId ON cards(syncId)")
+                database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_decks_syncId_non_empty ON decks(syncId) WHERE syncId <> ''")
+                database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_cards_syncId_non_empty ON cards(syncId) WHERE syncId <> ''")
+            }
+        }
+
+        private val SYNC_ID_INDEX_CALLBACK = object : RoomDatabase.Callback() {
+            override fun onCreate(database: SupportSQLiteDatabase) {
+                database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_decks_syncId_non_empty ON decks(syncId) WHERE syncId <> ''")
+                database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_cards_syncId_non_empty ON cards(syncId) WHERE syncId <> ''")
+            }
+        }
 
         fun build(context: Context): MutsumiCardDatabase =
             Room.databaseBuilder(
                 context.applicationContext,
                 MutsumiCardDatabase::class.java,
                 DATABASE_NAME,
-            ).addMigrations(MIGRATION_1_2).build()
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addCallback(SYNC_ID_INDEX_CALLBACK)
+                .build()
 
         fun inMemory(context: Context): MutsumiCardDatabase =
             Room.inMemoryDatabaseBuilder(
                 context.applicationContext,
                 MutsumiCardDatabase::class.java,
-            ).build()
+            ).addCallback(SYNC_ID_INDEX_CALLBACK).build()
     }
 
 }

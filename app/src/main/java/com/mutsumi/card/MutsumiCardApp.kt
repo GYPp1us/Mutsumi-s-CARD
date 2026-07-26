@@ -13,11 +13,15 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mutsumi.card.backup.BackupScreen
 import com.mutsumi.card.backup.BackupViewModel
+import com.mutsumi.card.ai.AiBatchScreen
+import com.mutsumi.card.ai.AiBatchViewModel
+import com.mutsumi.card.ai.AiSettingsScreen
 import com.mutsumi.card.cards.CardsCallbacks
 import com.mutsumi.card.cards.CardsContextPane
 import com.mutsumi.card.cards.CardsEvent
@@ -40,6 +44,7 @@ import java.io.File
 
 @Composable
 fun MutsumiCardApp(appContainer: AppContainer) {
+    val context = LocalContext.current
     var selectedName by rememberSaveable { mutableStateOf(AppDestination.Study.name) }
     val selected = AppDestination.valueOf(selectedName)
     var selectedDeckId by rememberSaveable { mutableLongStateOf(0L) }
@@ -57,8 +62,18 @@ fun MutsumiCardApp(appContainer: AppContainer) {
             cloudSettings = appContainer.cloudBackupSettings,
         )
     }
+    val aiViewModel: AiBatchViewModel = viewModel {
+        AiBatchViewModel(
+            context = context,
+            repository = appContainer.cardRepository,
+            settingsStore = requireNotNull(appContainer.aiSettingsStore),
+        )
+    }
 
-    LaunchedEffect(appContainer) { selectedDeckId = appContainer.ensureSelectedDeck() }
+    LaunchedEffect(appContainer) {
+        appContainer.initializeDefaultSeed(context)
+        selectedDeckId = appContainer.ensureSelectedDeck()
+    }
     LaunchedEffect(cardsViewModel) {
         cardsViewModel.events.collect { event ->
             when (event) {
@@ -98,7 +113,7 @@ fun MutsumiCardApp(appContainer: AppContainer) {
             selected = selected,
             onSelect = { selectedName = it.name },
             contextContent = contextContent,
-            onOpenSettings = { scope.launch { feedback.show("设置将在后续版本提供") } },
+            onOpenSettings = { selectedName = AppDestination.Settings.name },
             snackbarHost = { FeedbackHost(feedback) },
         ) {
             when (selected) {
@@ -126,6 +141,8 @@ fun MutsumiCardApp(appContainer: AppContainer) {
                     "正在保存卡片"
                 }
                 AppDestination.Backup -> BackupScreen(backupViewModel)
+                AppDestination.AiBatch -> AiBatchScreen(aiViewModel)
+                AppDestination.Settings -> AiSettingsScreen(requireNotNull(appContainer.aiSettingsStore))
             }
         }
     }

@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -25,6 +27,8 @@ import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.CloudUpload
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Unarchive
 import androidx.compose.material3.Button
@@ -36,18 +40,23 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.io.IOException
+import android.graphics.BitmapFactory
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -90,6 +99,15 @@ fun BackupScreen(viewModel: BackupViewModel, modifier: Modifier = Modifier) {
     }
 
     LaunchedEffect(viewModel) { viewModel.initializeCloud() }
+
+    state.pendingRestorePreview?.let { preview ->
+        RestorePreviewDialog(
+            preview = preview,
+            enabled = !state.isBusy,
+            onDismiss = viewModel::dismissRestorePreview,
+            onConfirm = viewModel::confirmRestorePreview,
+        )
+    }
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val wide = maxWidth >= 680.dp && maxWidth > maxHeight
@@ -261,6 +279,11 @@ private fun CloudConnectionSummary(state: BackupUiState, viewModel: BackupViewMo
                     Text("本次变化", style = MaterialTheme.typography.labelSmall)
                     Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                         Text(
+                            "卡组 ${state.cloudDeckCount}（+${state.cloudAddedOrChangedDeckCount}/-${state.cloudDeletedDeckCount}）",
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
                             "+${state.cloudAddedOrChangedCount}",
                             color = MaterialTheme.colorScheme.primary,
                             fontWeight = FontWeight.Bold,
@@ -288,13 +311,41 @@ private fun CloudConnectionSummary(state: BackupUiState, viewModel: BackupViewMo
                 Text("立即增量备份")
             }
             OutlinedButton(
-                onClick = { state.cloudSnapshots.firstOrNull()?.let { viewModel.restoreCloudSnapshot(it.id) } },
+                onClick = { state.cloudSnapshots.firstOrNull()?.let { viewModel.openRestorePreview(it.id) } },
                 enabled = !state.isBusy && state.cloudSnapshots.isNotEmpty(),
                 modifier = Modifier.weight(1f),
             ) {
                 Icon(Icons.Outlined.CloudDownload, contentDescription = null)
                 Spacer(Modifier.width(6.dp))
                 Text("从云端恢复")
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            ToggleDeleteButton("推送删除", state.pushDelete, !state.isBusy, viewModel::setPushDelete, Modifier.weight(1f))
+            ToggleDeleteButton("拉取删除", state.pullDelete, !state.isBusy, viewModel::setPullDelete, Modifier.weight(1f))
+        }
+        state.latestCloudEvent?.let { event ->
+            Surface(
+                color = if (state.cloudEventSucceeded == false) Color(0xFFFFE4E0) else Color(0xFFE4F4E9),
+                shape = RoundedCornerShape(6.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        if (state.cloudEventSucceeded == false) Icons.Outlined.ErrorOutline else Icons.Outlined.CheckCircle,
+                        contentDescription = null,
+                        tint = if (state.cloudEventSucceeded == false) Color(0xFF9B2C20) else Color(0xFF21633A),
+                    )
+                    Text(
+                        event,
+                        color = if (state.cloudEventSucceeded == false) Color(0xFF9B2C20) else Color(0xFF21633A),
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             }
         }
     }
@@ -328,13 +379,13 @@ private fun CloudVersions(state: BackupUiState, viewModel: BackupViewModel) {
                             if (index == 0) Text("当前", color = MaterialTheme.colorScheme.primary)
                         }
                         Text(
-                            "+${snapshot.addedOrChangedCount}  -${snapshot.deletedCount} · ${snapshot.cardCount} 张卡片",
+                            "卡组 ${snapshot.deckCount}（+${snapshot.addedOrChangedDeckCount}/-${snapshot.deletedDeckCount}） · 卡片 ${snapshot.cardCount}（+${snapshot.addedOrChangedCount}/-${snapshot.deletedCount}）",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         if (index != 0) {
                             OutlinedButton(
-                                onClick = { viewModel.restoreCloudSnapshot(snapshot.id) },
+                                onClick = { viewModel.openRestorePreview(snapshot.id) },
                                 enabled = !state.isBusy,
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
@@ -347,6 +398,81 @@ private fun CloudVersions(state: BackupUiState, viewModel: BackupViewModel) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ToggleDeleteButton(
+    text: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedButton(
+        onClick = { onCheckedChange(!checked) },
+        enabled = enabled,
+        modifier = modifier,
+        border = BorderStroke(1.dp, if (checked) Color(0xFFC53B32) else MaterialTheme.colorScheme.outline),
+    ) {
+        Text(text, color = if (checked) Color(0xFFC53B32) else MaterialTheme.colorScheme.onSurface)
+    }
+}
+
+@Composable
+private fun RestorePreviewDialog(
+    preview: CloudRestorePreview,
+    enabled: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { if (enabled) onDismiss() },
+        title = { Text("恢复预览") },
+        text = {
+            Column(
+            modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("快照时间：${formatTime(preview.createdAt)}", fontWeight = FontWeight.Bold)
+                Text("卡组 ${preview.stats.deckCount}，卡片 ${preview.stats.cardCount}")
+                Text("卡组变化 +${preview.stats.addedOrChangedDeckCount}/-${preview.stats.deletedDeckCount}，卡片变化 +${preview.stats.addedOrChangedCount}/-${preview.stats.deletedCount}")
+                preview.deletionWarning?.let { warning ->
+                    Text(warning, color = Color(0xFFC53B32), fontWeight = FontWeight.Bold)
+                }
+                preview.cards.forEach { card ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("${card.deckName} · ${card.keyText}", fontWeight = FontWeight.Bold)
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                PreviewImage(card.frontPng)
+                                PreviewImage(card.backPng)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { Button(onClick = onConfirm, enabled = enabled) { Text("确认恢复") } },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = enabled) { Text("取消") } },
+    )
+}
+
+@Composable
+private fun PreviewImage(bytes: ByteArray?) {
+    val bitmap = remember(bytes) { bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) } }
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = null,
+            modifier = Modifier.width(110.dp).heightIn(max = 140.dp),
+        )
+    } else {
+        Text("无正面图", style = MaterialTheme.typography.labelSmall)
     }
 }
 

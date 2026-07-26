@@ -38,7 +38,7 @@
 - 学习卡片无阴影、无透明虚影，正反面是一个刚体；物理渲染只接收中心和朝向。
 - 学习手势圈半径为学习区域短边 `min(width,height)` 的 `1/5`；纵向越圈后固定微倾，释放由位置和末速度共同判定，离场期间保持当前绝对朝向。背面纹理不得因起手轴变化产生平面内 `180°` 旋转。
 - 新数据库无需迁移旧 `cards.json`；首次启动在数据库为空时只注入一次 APK 内置的“入门示例”卡组，普通升级不重复注入。
-- AI 批量录入上下文按“system prompt、文件列表、文件内容、生成参数”固定顺序拼接，内部上限为 `100K` 字符；API Key 只允许保存在 AI 设置 DataStore，不得进入备份、日志或异常文本。
+- AI 批量录入上下文按“system prompt、文件列表、文件内容、生成参数”固定顺序拼接，内部上限为 `10K` 字符；API Key 只允许保存在 AI 设置 DataStore，不得进入备份、日志或异常文本。
 - 开发阶段未知异常必须抛出，禁止空 `catch` 和静默失败。
 - 保存、导入、导出、清空、归档、删除必须有明确反馈。
 - Release 必须保持 applicationId `com.mutsumi.card`，并使用与历史 Release 相同的签名证书以支持覆盖安装。
@@ -82,6 +82,6 @@ $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
 
 - 合并前运行单元测试、lint、AndroidTest 编译、debug APK 构建；有设备/模拟器时运行 connected tests。
 - Release workflow 必须验证 signer SHA-256 与历史签名一致，而不仅是“APK 有签名”。
-- 推送 `v0.6.1` 标签后等待 GitHub Actions 成功，检查 Release APK 和 SHA-256 附件。
+- 推送 `v0.6.3` 标签后等待 GitHub Actions 成功，检查 Release APK 和 SHA-256 附件。
 - 使用 `apksigner` 验证版本、证书；使用 `adb install -r` 或等价方式验证覆盖安装。
 - Obtainium 应可从 GitHub Release 自动检测 `mutsumi-card-release.apk`。

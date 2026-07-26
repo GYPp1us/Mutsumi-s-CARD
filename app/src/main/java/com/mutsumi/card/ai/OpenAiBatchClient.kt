@@ -34,7 +34,7 @@ class OpenAiBatchClient(
     ) = withContext(Dispatchers.IO) {
         require(settings.apiKey.isNotBlank()) { "请先在设置中填写 AI API Key" }
         require(parameters.groupCount > 0 && parameters.candidatesPerGroup > 0) { "生成数量必须大于 0" }
-        require(context.length <= MAX_CONTEXT_CHARS) { "AI 上下文超过 100K 字符" }
+        require(context.length <= MAX_CONTEXT_CHARS) { "AI 上下文超过 10K 字符" }
         val endpoint = settings.endpoint.trimEnd('/').let { if (it.endsWith("/chat/completions")) it else "$it/chat/completions" }
         val request = Request.Builder()
             .url(endpoint)
@@ -156,7 +156,7 @@ class OpenAiBatchClient(
     private fun JsonObject.requiredText(name: String): String = get(name)?.jsonPrimitive?.contentOrNull?.trim()
         ?.takeIf { it.isNotEmpty() } ?: throw AiGenerationException("tool 字段为空：$name")
 
-    private companion object { const val MAX_CONTEXT_CHARS = 100_000 }
+    private companion object { const val MAX_CONTEXT_CHARS = 10_000 }
 }
 
 data class AiRawGroup(val index: Int, val cards: List<AiRawCard>)

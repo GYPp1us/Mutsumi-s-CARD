@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
 
@@ -69,7 +70,7 @@ class AiBatchViewModel(
                 copy(
                     isGenerating = true,
                     message = "正在等待 AI 生成",
-                    contextWarning = if (contextResult.wasTruncated) "上下文超过 100K 字符，已截断到 100K" else null,
+                    contextWarning = if (contextResult.wasTruncated) "上下文超过 10K 字符，已截断到 10K" else null,
                 )
             }
             try {
@@ -83,7 +84,9 @@ class AiBatchViewModel(
                     }
                 }
                 update { copy(isGenerating = false, message = "候选生成完成") }
-            } catch (error: Exception) {
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: AiGenerationException) {
                 update { copy(isGenerating = false, message = "生成失败：${error.message ?: "未知错误"}") }
             }
         }
@@ -100,7 +103,9 @@ class AiBatchViewModel(
                 repository.saveCard(deckId, candidate.keyText, candidate.frontPng, candidate.backPng)
                 val next = (current.groupIndex + 1).coerceAtMost(current.groups.lastIndex.coerceAtLeast(0))
                 update { copy(isSaving = false, groupIndex = next, selectedCardIndex = 0, message = "已保存：${candidate.keyText}") }
-            } catch (error: Exception) {
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: IllegalArgumentException) {
                 update { copy(isSaving = false, message = "保存失败：${error.message ?: "未知错误"}") }
             }
         }
@@ -154,5 +159,5 @@ class AiBatchViewModel(
 
     private data class ContextBuildResult(val text: String, val wasTruncated: Boolean)
 
-    private companion object { const val MAX_CONTEXT_CHARS = 100_000 }
+    private companion object { const val MAX_CONTEXT_CHARS = 10_000 }
 }

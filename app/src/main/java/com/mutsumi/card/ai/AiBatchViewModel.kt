@@ -70,7 +70,7 @@ class AiBatchViewModel(
                 copy(
                     isGenerating = true,
                     message = "正在等待 AI 生成",
-                    contextWarning = if (contextResult.wasTruncated) "上下文超过 10K 字符，已截断到 10K" else null,
+                    contextWarning = if (contextResult.wasTruncated) "上下文超过 100K 字符，已截断到 100K" else null,
                 )
             }
             try {
@@ -159,5 +159,5 @@ class AiBatchViewModel(
 
     private data class ContextBuildResult(val text: String, val wasTruncated: Boolean)
 
-    private companion object { const val MAX_CONTEXT_CHARS = 10_000 }
+    private companion object { const val MAX_CONTEXT_CHARS = 100_000 }
 }

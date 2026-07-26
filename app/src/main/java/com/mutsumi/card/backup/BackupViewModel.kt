@@ -30,6 +30,13 @@ data class BackupUiState(
     val cloudAddedOrChangedCount: Int = 0,
     val cloudDeletedCount: Int = 0,
     val latestCloudEvent: String? = null,
+    val cloudDeckCount: Int = 0,
+    val cloudAddedOrChangedDeckCount: Int = 0,
+    val cloudDeletedDeckCount: Int = 0,
+    val pushDelete: Boolean = false,
+    val pullDelete: Boolean = false,
+    val pendingRestorePreview: CloudRestorePreview? = null,
+    val cloudEventSucceeded: Boolean? = null,
 )
 
 class BackupViewModel(
@@ -61,6 +68,8 @@ class BackupViewModel(
     fun setCloudUsername(value: String) = updateCloudFields { copy(cloudUsername = value) }
     fun setCloudPassword(value: String) = updateCloudFields { copy(cloudPassword = value) }
     fun setCloudRemoteDirectory(value: String) = updateCloudFields { copy(cloudRemoteDirectory = value) }
+    fun setPushDelete(value: Boolean) = updateCloudFields { copy(pushDelete = value) }
+    fun setPullDelete(value: Boolean) = updateCloudFields { copy(pullDelete = value) }
 
     fun toggleCloudConfig() {
         if (!mutableState.value.isBusy) {
@@ -107,10 +116,11 @@ class BackupViewModel(
             return
         }
         launchOperation("云端备份") {
-            val result = cloud.backup(config)
+            val result = cloud.backup(config, mutableState.value.pushDelete)
             applyOverview(result.overview)
-            val success = "云端增量备份完成"
-            mutableState.value = mutableState.value.copy(latestCloudEvent = success)
+            val stats = result.overview.current
+            val success = "云端增量备份完成：卡组 ${stats.deckCount}（+${stats.addedOrChangedDeckCount}/-${stats.deletedDeckCount}），卡片 ${stats.cardCount}（+${stats.addedOrChangedCount}/-${stats.deletedCount}）"
+            mutableState.value = mutableState.value.copy(latestCloudEvent = success, cloudEventSucceeded = true)
             buildSuccessMessage(success, result.warnings)
         }
     }
@@ -119,9 +129,44 @@ class BackupViewModel(
         val cloud = cloudOperations ?: error("当前未装配云端备份")
         val config = configuredCloudConfig() ?: return
         launchOperation("云端恢复") {
-            val result = cloud.restore(config, snapshotId)
+            val result = cloud.restore(config, snapshotId, mutableState.value.pullDelete)
+            applyOverview(cloud.inspect(config))
             val success = "已从云端导入 ${result.deckCount} 个卡组、${result.cardCount} 张卡片"
             mutableState.value = mutableState.value.copy(latestCloudEvent = success)
+            buildSuccessMessage(success, result.warnings)
+        }
+    }
+
+    fun openRestorePreview(snapshotId: String) {
+        val cloud = cloudOperations ?: error("当前未配置云端备份")
+        val config = configuredCloudConfig() ?: return
+        launchOperation("读取恢复预览") {
+            val preview = cloud.previewRestore(config, snapshotId, mutableState.value.pullDelete)
+            mutableState.value = mutableState.value.copy(
+                pendingRestorePreview = preview,
+                cloudEventSucceeded = true,
+            )
+            "请确认恢复 ${preview.stats.deckCount} 个卡组、${preview.stats.cardCount} 张卡片"
+        }
+    }
+
+    fun dismissRestorePreview() {
+        if (!mutableState.value.isBusy) mutableState.value = mutableState.value.copy(pendingRestorePreview = null)
+    }
+
+    fun confirmRestorePreview() {
+        val preview = mutableState.value.pendingRestorePreview ?: return
+        val cloud = cloudOperations ?: error("当前未配置云端备份")
+        val config = configuredCloudConfig() ?: return
+        launchOperation("云端恢复") {
+            val result = cloud.restore(config, preview.snapshotId, mutableState.value.pullDelete)
+            applyOverview(cloud.inspect(config))
+            val success = "云端恢复完成：${result.deckCount} 个卡组、${result.cardCount} 张卡片"
+            mutableState.value = mutableState.value.copy(
+                pendingRestorePreview = null,
+                latestCloudEvent = success,
+                cloudEventSucceeded = true,
+            )
             buildSuccessMessage(success, result.warnings)
         }
     }
@@ -176,11 +221,25 @@ class BackupViewModel(
                     isBusy = false,
                     message = "${label}失败：${error.message ?: "未知错误"}",
                 )
+            } catch (error: IllegalArgumentException) {
+                val message = "${label}失败：${error.message ?: "参数无效"}"
+                mutableState.value = mutableState.value.copy(
+                    isBusy = false,
+                    message = message,
+                    latestCloudEvent = message.takeIf { label.startsWith("云端") } ?: mutableState.value.latestCloudEvent,
+                    cloudEventSucceeded = false.takeIf { label.startsWith("云端") } ?: mutableState.value.cloudEventSucceeded,
+                )
             } catch (error: IOException) {
                 mutableState.value = mutableState.value.copy(
                     isBusy = false,
                     message = "${label}失败：${error.message ?: "读写失败"}",
                 )
+                if (label.startsWith("云端")) {
+                    mutableState.value = mutableState.value.copy(
+                        latestCloudEvent = "${label}失败：${error.message ?: "读写失败"}",
+                        cloudEventSucceeded = false,
+                    )
+                }
             }
         }
     }
@@ -204,8 +263,11 @@ class BackupViewModel(
     private fun applyOverview(overview: CloudBackupOverview) {
         mutableState.value = mutableState.value.copy(
             cloudSnapshots = overview.snapshots,
-            cloudAddedOrChangedCount = overview.addedOrChangedCount,
-            cloudDeletedCount = overview.deletedCount,
+            cloudAddedOrChangedCount = overview.current.addedOrChangedCount,
+            cloudDeletedCount = overview.current.deletedCount,
+            cloudDeckCount = overview.current.deckCount,
+            cloudAddedOrChangedDeckCount = overview.current.addedOrChangedDeckCount,
+            cloudDeletedDeckCount = overview.current.deletedDeckCount,
         )
     }
 

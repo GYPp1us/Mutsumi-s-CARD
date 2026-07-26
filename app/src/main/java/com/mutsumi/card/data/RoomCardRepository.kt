@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.io.IOException
+import java.util.UUID
 
 class RoomCardRepository(
     private val dao: CardDao,
@@ -47,13 +48,16 @@ class RoomCardRepository(
         return source.map { cards -> cards.map(::toDomain) }
     }
 
-    override suspend fun ensureDefaultDeck(): Long = dao.ensureDefaultDeck(now())
+    override suspend fun ensureDefaultDeck(): Long {
+        dao.ensureSyncIds()
+        return dao.ensureDefaultDeck(now()).also { dao.ensureSyncIds() }
+    }
 
     override suspend fun createDeck(name: String): Long {
         val normalized = requireText(name, "卡组名称不能为空")
         val timestamp = now()
         return dao.insertDeck(
-            DeckEntity(name = normalized, createdAt = timestamp, updatedAt = timestamp),
+            DeckEntity(name = normalized, createdAt = timestamp, updatedAt = timestamp, syncId = UUID.randomUUID().toString()),
         )
     }
 
@@ -90,6 +94,7 @@ class RoomCardRepository(
                 dao.insertCardWithReview(
                     CardEntity(
                         deckId = deckId,
+                        syncId = UUID.randomUUID().toString(),
                         keyText = normalizedKey,
                         frontImagePath = frontPath,
                         valueImagePath = backPath,

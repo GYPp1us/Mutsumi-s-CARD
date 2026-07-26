@@ -7,12 +7,16 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 import androidx.room.Relation
 
-@Entity(tableName = "decks")
+@Entity(
+    tableName = "decks",
+    indices = [Index("syncId")],
+)
 data class DeckEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
     val createdAt: Long,
     val updatedAt: Long,
+    val syncId: String = "",
 )
 
 @Entity(
@@ -25,7 +29,10 @@ data class DeckEntity(
             onDelete = ForeignKey.CASCADE,
         ),
     ],
-    indices = [Index("deckId")],
+    indices = [
+        Index("deckId"),
+        Index("syncId"),
+    ],
 )
 data class CardEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -36,6 +43,7 @@ data class CardEntity(
     val updatedAt: Long,
     val archived: Boolean = false,
     val frontImagePath: String? = null,
+    val syncId: String = "",
 )
 
 @Entity(
@@ -74,4 +82,16 @@ data class CardWithReviewState(
 data class DeckWithCardCount(
     @Embedded val deck: DeckEntity,
     val cardCount: Int,
+)
+
+data class SyncApplyRows(
+    val decksToInsert: List<DeckEntity>,
+    val decksToUpdate: List<DeckEntity>,
+    val cardsToInsert: List<CardEntity>,
+    val cardsToUpdate: List<CardEntity>,
+    val reviews: List<ReviewStateEntity>,
+    val cardsToDelete: List<CardEntity>,
+    val decksToDelete: List<DeckEntity>,
+    val oldImagesToDelete: List<String>,
+    val queuedAt: Long,
 )

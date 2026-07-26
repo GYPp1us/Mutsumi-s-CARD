@@ -7,6 +7,7 @@ import com.mutsumi.card.backup.CloudBackupSettings
 import com.mutsumi.card.backup.PrivateCloudBackupSettings
 import com.mutsumi.card.backup.RepositoryCloudBackupOperations
 import com.mutsumi.card.backup.RepositoryBackupOperations
+import com.mutsumi.card.backup.RoomCloudBackupDataAccess
 import com.mutsumi.card.backup.ExportSummary
 import com.mutsumi.card.backup.ImportSummary
 import com.mutsumi.card.data.image.CardImageStore
@@ -14,6 +15,7 @@ import com.mutsumi.card.data.image.FileCardImageStore
 import com.mutsumi.card.data.local.MutsumiCardDatabase
 import com.mutsumi.card.data.preferences.AppPreferences
 import com.mutsumi.card.data.preferences.DataStoreAppPreferences
+import com.mutsumi.card.ai.AiSettingsStore
 import kotlinx.coroutines.flow.first
 import java.io.File
 
@@ -24,7 +26,12 @@ class AppContainer(
     val backupOperations: BackupOperations = UnavailableBackupOperations,
     val cloudBackupOperations: CloudBackupOperations? = null,
     val cloudBackupSettings: CloudBackupSettings? = null,
+    val aiSettingsStore: AiSettingsStore? = null,
 ) {
+    suspend fun initializeDefaultSeed(context: Context) {
+        DefaultSeedInitializer(context, cardRepository).initialize()
+    }
+
     suspend fun ensureSelectedDeck(): Long {
         cardRepository.retryPendingImageCleanup()
         val defaultDeckId = cardRepository.ensureDefaultDeck()
@@ -44,10 +51,12 @@ class AppContainer(
             val database = MutsumiCardDatabase.build(context)
             val imageStore = FileCardImageStore(File(context.filesDir, "card-store-v2"))
             val repository = RoomCardRepository(database.cardDao(), imageStore)
+            val cloudDataAccess = RoomCloudBackupDataAccess(database.cardDao(), imageStore)
             val repositoryBackupOperations = RepositoryBackupOperations(
                 repository = repository,
                 imageStore = imageStore,
                 temporaryDirectory = File(context.cacheDir, "backup-v2"),
+                cloudDataAccess = cloudDataAccess,
             )
             return AppContainer(
                 cardRepository = repository,
@@ -57,8 +66,10 @@ class AppContainer(
                 cloudBackupOperations = RepositoryCloudBackupOperations(
                     repositoryOperations = repositoryBackupOperations,
                     temporaryDirectory = File(context.cacheDir, "cloud-backup-v1"),
+                    baselineFile = File(context.filesDir, "cloud-sync-baseline.json"),
                 ),
                 cloudBackupSettings = PrivateCloudBackupSettings(context),
+                aiSettingsStore = AiSettingsStore.create(context),
             )
         }
     }

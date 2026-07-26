@@ -22,6 +22,9 @@ abstract class CardDao {
     @Insert
     protected abstract suspend fun insertReviewState(reviewState: ReviewStateEntity)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    protected abstract suspend fun upsertReviewState(reviewState: ReviewStateEntity)
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     protected abstract suspend fun insertPendingImageDeletion(
         deletion: PendingImageDeletionEntity,
@@ -44,6 +47,42 @@ abstract class CardDao {
 
     @Query("SELECT * FROM decks ORDER BY createdAt ASC, id ASC")
     abstract fun observeDecks(): Flow<List<DeckEntity>>
+
+    @Query("SELECT * FROM decks ORDER BY createdAt ASC, id ASC")
+    abstract suspend fun getAllDecks(): List<DeckEntity>
+
+    @Query("SELECT * FROM cards ORDER BY createdAt ASC, id ASC")
+    abstract suspend fun getAllCards(): List<CardEntity>
+
+    @Query("SELECT * FROM review_states ORDER BY cardId ASC")
+    abstract suspend fun getAllReviewStates(): List<ReviewStateEntity>
+
+    @Query("SELECT * FROM decks WHERE syncId = :syncId")
+    abstract suspend fun getDeckBySyncId(syncId: String): DeckEntity?
+
+    @Query("SELECT * FROM cards WHERE syncId = :syncId")
+    abstract suspend fun getCardBySyncId(syncId: String): CardEntity?
+
+    @Query("UPDATE decks SET syncId = :syncId WHERE id = :id")
+    abstract suspend fun setDeckSyncId(id: Long, syncId: String): Int
+
+    @Query("UPDATE cards SET syncId = :syncId WHERE id = :id")
+    abstract suspend fun setCardSyncId(id: Long, syncId: String): Int
+
+    @Transaction
+    open suspend fun ensureSyncIds() {
+        getAllDecks().filter { it.syncId.isBlank() }.forEach { deck ->
+            check(setDeckSyncId(deck.id, java.util.UUID.randomUUID().toString()) == 1)
+        }
+        getAllCards().filter { it.syncId.isBlank() }.forEach { card ->
+            check(setCardSyncId(card.id, java.util.UUID.randomUUID().toString()) == 1)
+        }
+    }
+
+    @Transaction
+    open suspend fun saveReviewState(reviewState: ReviewStateEntity) {
+        upsertReviewState(reviewState)
+    }
 
     @Query(
         """
@@ -139,11 +178,27 @@ abstract class CardDao {
     }
 
     @Transaction
+    open suspend fun applySyncRows(rows: SyncApplyRows) {
+        rows.cardsToDelete.forEach { card ->
+            deleteCardRow(card)
+            insertPendingImageDeletion(PendingImageDeletionEntity(card.valueImagePath, rows.queuedAt))
+            card.frontImagePath?.let { insertPendingImageDeletion(PendingImageDeletionEntity(it, rows.queuedAt)) }
+        }
+        rows.decksToDelete.forEach { deleteDeckRow(it) }
+        rows.decksToInsert.forEach { insertDeck(it) }
+        rows.decksToUpdate.forEach { check(updateDeckRow(it) == 1) }
+        rows.cardsToInsert.forEach { insertCard(it) }
+        rows.cardsToUpdate.forEach { check(updateCardRow(it) == 1) }
+        rows.reviews.forEach { review -> upsertReviewState(review) }
+        rows.oldImagesToDelete.forEach { insertPendingImageDeletion(PendingImageDeletionEntity(it, rows.queuedAt)) }
+    }
+
+    @Transaction
     open suspend fun ensureDefaultDeck(now: Long): Long {
         val existing = findEarliestDeck()
         return existing?.id ?: insertDeck(
-            DeckEntity(
-                name = DEFAULT_DECK_NAME,
+                DeckEntity(
+                    name = DEFAULT_DECK_NAME,
                 createdAt = now,
                 updatedAt = now,
             ),

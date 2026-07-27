@@ -38,21 +38,25 @@ class CardDaoTest {
         dao.ensureDefaultDeck(200L)
 
         val decks = dao.observeDecks().first()
-        assertThat(decks).containsExactly(DeckEntity(1L, "默认卡组", 100L, 100L))
+        assertThat(decks).hasSize(1)
+        assertThat(decks.single().id).isEqualTo(1L)
+        assertThat(decks.single().name).isEqualTo("默认卡组")
+        assertThat(decks.single().createdAt).isEqualTo(100L)
+        assertThat(decks.single().updatedAt).isEqualTo(100L)
+        assertThat(decks.single().syncId).isNotEmpty()
         assertThat(dao.observeActiveCardsWithReview(1L).first()).isEmpty()
     }
 
     @Test
     fun ensureDefaultDeckReusesEarliestExistingDeckWithoutCreatingCards() = runTest {
-        val existingId = dao.insertDeck(
-            DeckEntity(name = "我的卡组", createdAt = 50L, updatedAt = 50L),
-        )
+        val existing = DeckEntity(name = "我的卡组", createdAt = 50L, updatedAt = 50L)
+        val existingId = dao.insertDeck(existing)
 
         val ensuredId = dao.ensureDefaultDeck(100L)
 
         assertThat(ensuredId).isEqualTo(existingId)
         assertThat(dao.observeDecks().first()).containsExactly(
-            DeckEntity(existingId, "我的卡组", 50L, 50L),
+            existing.copy(id = existingId),
         )
         assertThat(dao.observeActiveCardsWithReview(existingId).first()).isEmpty()
     }

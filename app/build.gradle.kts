@@ -25,8 +25,8 @@ android {
         applicationId = "com.mutsumi.card"
         minSdk = 26
         targetSdk = 36
-        versionCode = 23
-        versionName = "0.6.4"
+        versionCode = 24
+        versionName = "0.6.5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -68,6 +68,8 @@ android {
         unitTests.isIncludeAndroidResources = true
         unitTests.isReturnDefaultValues = true
     }
+
+    sourceSets["androidTest"].assets.srcDir("$projectDir/schemas")
 }
 
 ksp {
@@ -126,6 +128,7 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.room:room-testing:2.8.4")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

@@ -9,14 +9,14 @@ import androidx.room.Relation
 
 @Entity(
     tableName = "decks",
-    indices = [Index("syncId")],
+    indices = [Index(value = ["syncId"], unique = true)],
 )
 data class DeckEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
     val createdAt: Long,
     val updatedAt: Long,
-    val syncId: String = "",
+    val syncId: String = java.util.UUID.randomUUID().toString(),
 )
 
 @Entity(
@@ -31,7 +31,7 @@ data class DeckEntity(
     ],
     indices = [
         Index("deckId"),
-        Index("syncId"),
+        Index(value = ["syncId"], unique = true),
     ],
 )
 data class CardEntity(
@@ -43,7 +43,7 @@ data class CardEntity(
     val updatedAt: Long,
     val archived: Boolean = false,
     val frontImagePath: String? = null,
-    val syncId: String = "",
+    val syncId: String = java.util.UUID.randomUUID().toString(),
 )
 
 @Entity(

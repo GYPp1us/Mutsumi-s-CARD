@@ -7,8 +7,8 @@
 
 ## 当前目标
 
-- 当前开发目标是完成并发布云同步与 AI 批量录入版本。
-- 当前开发分支：`codex/v0.6.4-release`。
+- 当前开发目标是修复旧数据库升级崩溃并发布 `v0.6.5`。
+- 当前开发分支：`codex/v0.6.5-migration-fix`。
 - 当前隔离工作区：`.worktrees/v0.6.2-draw-markdown-fix`。
 - 不要在主工作区的 `main` 上直接实现重构。
 - 必须持续推进至 GitHub Release 包含已签名 APK；中间阶段完成不等于目标完成。

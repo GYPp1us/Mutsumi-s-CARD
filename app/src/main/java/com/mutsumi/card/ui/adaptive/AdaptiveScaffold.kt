@@ -12,8 +12,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.IconButton
@@ -51,31 +53,42 @@ fun AdaptiveScaffold(
         val outerWidthDp = maxWidth.value.roundToInt()
         val outerHeightDp = maxHeight.value.roundToInt()
         val outerMode = AdaptiveLayoutPolicy.mode(outerWidthDp, outerHeightDp)
-        Scaffold(
-            modifier = Modifier.fillMaxSize(),
-            contentWindowInsets = WindowInsets.safeDrawing,
-            snackbarHost = snackbarHost,
-            bottomBar = {
-                if (outerMode != AppLayoutMode.LandscapeThreePane) {
-                    BottomNavigationBar(selected, onSelect)
+        Box(Modifier.fillMaxSize()) {
+            Scaffold(
+                modifier = Modifier.fillMaxSize(),
+                contentWindowInsets = WindowInsets.safeDrawing,
+                snackbarHost = {},
+                bottomBar = {
+                    if (outerMode != AppLayoutMode.LandscapeThreePane) {
+                        BottomNavigationBar(selected, onSelect)
+                    }
+                },
+            ) { safePadding ->
+                BoxWithConstraints(Modifier.fillMaxSize().padding(safePadding)) {
+                    val widthDp = maxWidth.value.roundToInt()
+                    val heightDp = maxHeight.value.roundToInt()
+                    when (AdaptiveLayoutPolicy.mode(widthDp, heightDp)) {
+                        AppLayoutMode.LandscapeThreePane -> ThreePaneShell(
+                            selected = selected,
+                            onSelect = onSelect,
+                            onOpenSettings = onOpenSettings,
+                            contextContent = contextContent,
+                            content = content,
+                        )
+                        AppLayoutMode.Portrait,
+                        AppLayoutMode.CompactLandscape,
+                        -> Box(Modifier.fillMaxSize().testTag("main-workspace")) { content() }
+                    }
                 }
-            },
-        ) { safePadding ->
-            BoxWithConstraints(Modifier.fillMaxSize().padding(safePadding)) {
-            val widthDp = maxWidth.value.roundToInt()
-            val heightDp = maxHeight.value.roundToInt()
-            when (AdaptiveLayoutPolicy.mode(widthDp, heightDp)) {
-                AppLayoutMode.LandscapeThreePane -> ThreePaneShell(
-                    selected = selected,
-                    onSelect = onSelect,
-                    onOpenSettings = onOpenSettings,
-                    contextContent = contextContent,
-                    content = content,
-                )
-                AppLayoutMode.Portrait,
-                AppLayoutMode.CompactLandscape,
-                -> Box(Modifier.fillMaxSize().testTag("main-workspace")) { content() }
-                }
+            }
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(12.dp)
+                    .widthIn(max = 420.dp),
+            ) {
+                snackbarHost()
             }
         }
     }

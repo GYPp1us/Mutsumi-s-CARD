@@ -9,7 +9,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.first
 
 data class AiSettings(
-    val endpoint: String = "https://api.deepseek.com",
+    val endpoint: String = "https://api.deepseek.com/v1",
     val apiKey: String = "",
     val model: String = "deepseek-chat",
 )

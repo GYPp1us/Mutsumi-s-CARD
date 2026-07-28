@@ -8,8 +8,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import java.io.InputStream
 import java.io.IOException
+import java.io.InputStream
 import java.io.OutputStream
 
 interface BackupOperations {
@@ -30,6 +30,7 @@ data class BackupUiState(
     val cloudAddedOrChangedCount: Int = 0,
     val cloudDeletedCount: Int = 0,
     val latestCloudEvent: String? = null,
+    val errorMessage: String? = null,
     val cloudDeckCount: Int = 0,
     val cloudAddedOrChangedDeckCount: Int = 0,
     val cloudDeletedDeckCount: Int = 0,
@@ -52,16 +53,20 @@ class BackupViewModel(
     fun initializeCloud() {
         if (cloudInitialized) return
         cloudInitialized = true
-        val config = cloudSettings?.load() ?: return
-        mutableState.value = mutableState.value.copy(
-            cloudServerUrl = config.serverUrl,
-            cloudUsername = config.username,
-            cloudPassword = config.password,
-            cloudRemoteDirectory = config.remoteDirectory,
-            isCloudConfigured = true,
-            isEditingCloudConfig = false,
-        )
-        refreshCloud()
+        try {
+            val config = cloudSettings?.load() ?: return
+            mutableState.value = mutableState.value.copy(
+                cloudServerUrl = config.serverUrl,
+                cloudUsername = config.username,
+                cloudPassword = config.password,
+                cloudRemoteDirectory = config.remoteDirectory,
+                isCloudConfigured = true,
+                isEditingCloudConfig = false,
+            )
+            refreshCloud()
+        } catch (error: Exception) {
+            reportError("云端初始化失败：${error.message ?: "无法读取云端配置"}")
+        }
     }
 
     fun setCloudServerUrl(value: String) = updateCloudFields { copy(cloudServerUrl = value) }
@@ -80,9 +85,15 @@ class BackupViewModel(
     }
 
     fun saveCloudConfig() {
-        val settings = cloudSettings ?: error("当前未装配云端备份配置")
+        val settings = cloudSettings ?: run {
+            reportError("保存连接失败：当前未装配云端配置")
+            return
+        }
+        val cloud = cloudOperations ?: run {
+            reportError("保存连接失败：当前未装配云端备份")
+            return
+        }
         val config = currentCloudConfig()
-        val cloud = cloudOperations ?: error("当前未装配云端备份")
         launchOperation("保存连接") {
             WebDavClient.validateConfig(config)
             settings.save(config)
@@ -107,11 +118,15 @@ class BackupViewModel(
     }
 
     fun backupToCloud() {
-        val cloud = cloudOperations ?: error("当前未装配云端备份")
+        val cloud = cloudOperations ?: run {
+            reportError("云端备份失败：当前未装配云端备份")
+            return
+        }
         val config = configuredCloudConfig() ?: run {
             mutableState.value = mutableState.value.copy(
                 isEditingCloudConfig = true,
                 message = "请先填写并保存 WebDAV 连接",
+                errorMessage = "请先填写并保存 WebDAV 连接",
             )
             return
         }
@@ -126,20 +141,32 @@ class BackupViewModel(
     }
 
     fun restoreCloudSnapshot(snapshotId: String) {
-        val cloud = cloudOperations ?: error("当前未装配云端备份")
-        val config = configuredCloudConfig() ?: return
+        val cloud = cloudOperations ?: run {
+            reportError("云端恢复失败：当前未装配云端备份")
+            return
+        }
+        val config = configuredCloudConfig() ?: run {
+            reportError("云端恢复失败：请先配置 WebDAV 连接")
+            return
+        }
         launchOperation("云端恢复") {
             val result = cloud.restore(config, snapshotId, mutableState.value.pullDelete)
             applyOverview(cloud.inspect(config))
             val success = "已从云端导入 ${result.deckCount} 个卡组、${result.cardCount} 张卡片"
-            mutableState.value = mutableState.value.copy(latestCloudEvent = success)
+            mutableState.value = mutableState.value.copy(latestCloudEvent = success, cloudEventSucceeded = true)
             buildSuccessMessage(success, result.warnings)
         }
     }
 
     fun openRestorePreview(snapshotId: String) {
-        val cloud = cloudOperations ?: error("当前未配置云端备份")
-        val config = configuredCloudConfig() ?: return
+        val cloud = cloudOperations ?: run {
+            reportError("读取恢复预览失败：当前未配置云端备份")
+            return
+        }
+        val config = configuredCloudConfig() ?: run {
+            reportError("读取恢复预览失败：请先配置 WebDAV 连接")
+            return
+        }
         launchOperation("读取恢复预览") {
             val preview = cloud.previewRestore(config, snapshotId, mutableState.value.pullDelete)
             mutableState.value = mutableState.value.copy(
@@ -156,8 +183,14 @@ class BackupViewModel(
 
     fun confirmRestorePreview() {
         val preview = mutableState.value.pendingRestorePreview ?: return
-        val cloud = cloudOperations ?: error("当前未配置云端备份")
-        val config = configuredCloudConfig() ?: return
+        val cloud = cloudOperations ?: run {
+            reportError("云端恢复失败：当前未配置云端备份")
+            return
+        }
+        val config = configuredCloudConfig() ?: run {
+            reportError("云端恢复失败：请先配置 WebDAV 连接")
+            return
+        }
         launchOperation("云端恢复") {
             val result = cloud.restore(config, preview.snapshotId, mutableState.value.pullDelete)
             applyOverview(cloud.inspect(config))
@@ -196,52 +229,46 @@ class BackupViewModel(
     }
 
     fun onExportAccessFailure(error: Exception) {
-        if (!mutableState.value.isBusy) mutableState.value = mutableState.value.copy(
-            message = "导出失败：${error.message ?: "无法打开目标文件"}",
-        )
+        reportError("导出失败：${error.message ?: "无法打开目标文件"}")
     }
 
     fun onImportAccessFailure(error: Exception) {
-        if (!mutableState.value.isBusy) mutableState.value = mutableState.value.copy(
-            message = "导入失败：${error.message ?: "无法打开来源文件"}",
-        )
+        reportError("导入失败：${error.message ?: "无法打开来源文件"}")
     }
 
     private fun launchOperation(label: String, block: suspend () -> String) {
         if (mutableState.value.isBusy) return
-        mutableState.value = mutableState.value.copy(isBusy = true, message = "正在$label…")
+        mutableState.value = mutableState.value.copy(isBusy = true, message = "正在$label…", errorMessage = null)
         (operationScope ?: viewModelScope).launch {
             try {
                 val resultMessage = block()
-                mutableState.value = mutableState.value.copy(isBusy = false, message = resultMessage)
+                mutableState.value = mutableState.value.copy(isBusy = false, message = resultMessage, errorMessage = null)
             } catch (error: CancellationException) {
                 throw error
-            } catch (error: BackupFormatException) {
-                mutableState.value = mutableState.value.copy(
-                    isBusy = false,
-                    message = "${label}失败：${error.message ?: "未知错误"}",
-                )
-            } catch (error: IllegalArgumentException) {
-                val message = "${label}失败：${error.message ?: "参数无效"}"
+            } catch (error: Exception) {
+                val message = "${label}失败：${error.message ?: fallbackFor(label)}"
                 mutableState.value = mutableState.value.copy(
                     isBusy = false,
                     message = message,
+                    errorMessage = message,
                     latestCloudEvent = message.takeIf { label.startsWith("云端") } ?: mutableState.value.latestCloudEvent,
                     cloudEventSucceeded = false.takeIf { label.startsWith("云端") } ?: mutableState.value.cloudEventSucceeded,
                 )
-            } catch (error: IOException) {
-                mutableState.value = mutableState.value.copy(
-                    isBusy = false,
-                    message = "${label}失败：${error.message ?: "读写失败"}",
-                )
-                if (label.startsWith("云端")) {
-                    mutableState.value = mutableState.value.copy(
-                        latestCloudEvent = "${label}失败：${error.message ?: "读写失败"}",
-                        cloudEventSucceeded = false,
-                    )
-                }
             }
         }
+    }
+
+    private fun fallbackFor(label: String): String = when {
+        label.contains("云端") -> "云端连接或读写失败"
+        label == "导入" || label == "导出" -> "文件读写失败"
+        else -> "未知错误"
+    }
+
+    private fun reportError(message: String) {
+        if (!mutableState.value.isBusy) mutableState.value = mutableState.value.copy(
+            message = message,
+            errorMessage = message,
+        )
     }
 
     private fun updateCloudFields(transform: BackupUiState.() -> BackupUiState) {
@@ -272,5 +299,5 @@ class BackupViewModel(
     }
 
     private fun buildSuccessMessage(success: String, warnings: List<String>): String =
-        if (warnings.isEmpty()) success else "$success；${warnings.joinToString("；")}"
+        if (warnings.isEmpty()) success else "$success：${warnings.joinToString("；")}"
 }

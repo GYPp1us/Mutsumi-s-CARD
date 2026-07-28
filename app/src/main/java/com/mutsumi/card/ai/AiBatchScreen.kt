@@ -1,72 +1,103 @@
 package com.mutsumi.card.ai
 
+import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import android.graphics.BitmapFactory
+import com.mutsumi.card.ui.components.FeedbackController
+import kotlinx.coroutines.launch
 
 @Composable
-fun AiBatchScreen(viewModel: AiBatchViewModel, modifier: Modifier = Modifier) {
+fun AiBatchScreen(
+    viewModel: AiBatchViewModel,
+    feedback: FeedbackController,
+    modifier: Modifier = Modifier,
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
     var showCreateDeck by remember { mutableStateOf(false) }
     var newDeckName by remember { mutableStateOf("") }
+
+    LaunchedEffect(state.errorMessage) {
+        state.errorMessage?.let { feedback.show(it) }
+    }
+
     val fileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        runCatching { uris.map { readDocument(context, it) } }
-            .onSuccess(viewModel::setImportedFiles)
-            .onFailure { viewModel.showMessage("文件读取失败：${it.message}") }
+        try {
+            viewModel.setImportedFiles(uris.map { readDocument(context, it) })
+        } catch (error: Exception) {
+            viewModel.showError("文件读取失败：${error.message ?: "无法读取所选文件"}")
+        }
     }
     val folderLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
-            runCatching { readTree(context, DocumentFile.fromTreeUri(context, uri) ?: error("无法打开文件夹")) }
-                .onSuccess(viewModel::setImportedFiles)
-                .onFailure { viewModel.showMessage("文件夹读取失败：${it.message}") }
+            try {
+                val root = DocumentFile.fromTreeUri(context, uri)
+                    ?: error("无法打开文件夹")
+                viewModel.setImportedFiles(readTree(context, root))
+            } catch (error: Exception) {
+                viewModel.showError("文件夹读取失败：${error.message ?: "无法读取所选文件夹"}")
+            }
         }
     }
-    Column(modifier = modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+
+    CompositionLocalProvider(
+        LocalTextStyle provides MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+    ) {
+    Column(
+        modifier = modifier.fillMaxSize().padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
         AiTopBar(
             state = state,
             onFiles = { fileLauncher.launch(arrayOf("text/plain", "text/markdown", "text/*")) },
@@ -74,8 +105,11 @@ fun AiBatchScreen(viewModel: AiBatchViewModel, modifier: Modifier = Modifier) {
             onGenerate = viewModel::generate,
             onParameters = viewModel::setParameters,
             onCreateDeck = { showCreateDeck = true },
+            onCopyMessage = { message ->
+                clipboardManager.setText(AnnotatedString(message))
+                scope.launch { feedback.show("已复制通知内容") }
+            },
         )
-        state.message.takeIf { it.isNotBlank() }?.let { Text(it, fontWeight = FontWeight.Bold) }
         state.contextWarning?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         BoxWithConstraints(modifier = Modifier.weight(1f)) {
             if (maxWidth >= 700.dp) {
@@ -98,6 +132,7 @@ fun AiBatchScreen(viewModel: AiBatchViewModel, modifier: Modifier = Modifier) {
             }
         }
     }
+
     if (showCreateDeck) {
         AlertDialog(
             onDismissRequest = { showCreateDeck = false },
@@ -123,6 +158,7 @@ fun AiBatchScreen(viewModel: AiBatchViewModel, modifier: Modifier = Modifier) {
             dismissButton = { TextButton(onClick = { showCreateDeck = false }) { Text("取消") } },
         )
     }
+    }
 }
 
 @Composable
@@ -133,29 +169,81 @@ private fun AiTopBar(
     onGenerate: () -> Unit,
     onParameters: (AiGenerationParameters) -> Unit,
     onCreateDeck: () -> Unit,
+    onCopyMessage: (String) -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        OutlinedTextField(
-            value = state.parameters.groupCount.toString(),
-            onValueChange = { it.toIntOrNull()?.let { value -> onParameters(state.parameters.copy(groupCount = value.coerceAtLeast(1))) } },
-            label = { Text("卡组数") },
-            singleLine = true,
+        ParameterDropdown(
+            selectedLabel = state.parameters.groupCountRange.label,
+            options = AiGroupCountRange.entries.toList(),
+            optionLabel = { it.label },
+            onSelect = { range -> onParameters(state.parameters.copy(groupCountRange = range)) },
             modifier = Modifier.width(92.dp),
         )
-        OutlinedTextField(
-            value = state.parameters.candidatesPerGroup.toString(),
-            onValueChange = { it.toIntOrNull()?.let { value -> onParameters(state.parameters.copy(candidatesPerGroup = value.coerceAtLeast(1))) } },
-            label = { Text("每组候选") },
-            singleLine = true,
+        ParameterDropdown(
+            selectedLabel = state.parameters.candidatesPerGroup.toString(),
+            options = (1..5).toList(),
+            optionLabel = Int::toString,
+            onSelect = { count -> onParameters(state.parameters.copy(candidatesPerGroup = count)) },
             modifier = Modifier.width(110.dp),
         )
         DeckSelector(state, onParameters, onCreateDeck)
         OutlinedButton(onClick = onFiles) { Text("导入文件") }
         OutlinedButton(onClick = onFolder) { Text("导入文件夹") }
         Button(onClick = onGenerate, enabled = !state.isGenerating && !state.isSaving) { Text("开始生成") }
+        state.message.takeIf { it.isNotBlank() }?.let { message ->
+            Surface(
+                color = if (state.errorMessage != null) {
+                    MaterialTheme.colorScheme.errorContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
+                },
+                contentColor = if (state.errorMessage != null) {
+                    MaterialTheme.colorScheme.onErrorContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.clickable { onCopyMessage(message) },
+            ) {
+                Text(
+                    message,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun <T> ParameterDropdown(
+    selectedLabel: String,
+    options: List<T>,
+    optionLabel: (T) -> String,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier) {
+        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(selectedLabel, maxLines = 1)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(optionLabel(option)) },
+                    onClick = {
+                        onSelect(option)
+                        expanded = false
+                    },
+                )
+            }
+        }
     }
 }
 
@@ -166,13 +254,21 @@ private fun DeckSelector(
     onCreateDeck: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    Box {
-        OutlinedButton(onClick = { expanded = true }) { Text(state.decks.firstOrNull { it.id == state.parameters.targetDeckId }?.name ?: "选择卡组") }
+    Box(Modifier.width(160.dp)) {
+        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(
+                state.decks.firstOrNull { it.id == state.parameters.targetDeckId }?.name ?: "选择卡组",
+                maxLines = 1,
+            )
+        }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             state.decks.forEach { deck ->
                 DropdownMenuItem(
                     text = { Text(deck.name) },
-                    onClick = { onParameters(state.parameters.copy(targetDeckId = deck.id)); expanded = false },
+                    onClick = {
+                        onParameters(state.parameters.copy(targetDeckId = deck.id))
+                        expanded = false
+                    },
                 )
             }
             DropdownMenuItem(
@@ -185,7 +281,11 @@ private fun DeckSelector(
 
 @Composable
 private fun SourcePane(state: AiBatchUiState, viewModel: AiBatchViewModel, modifier: Modifier) {
-    Surface(border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), shape = RoundedCornerShape(6.dp), modifier = modifier) {
+    Surface(
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shape = RoundedCornerShape(6.dp),
+        modifier = modifier,
+    ) {
         Column(Modifier.fillMaxSize().padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("原始素材", fontWeight = FontWeight.Bold)
             OutlinedTextField(
@@ -200,7 +300,11 @@ private fun SourcePane(state: AiBatchUiState, viewModel: AiBatchViewModel, modif
 
 @Composable
 private fun CandidatePane(state: AiBatchUiState, viewModel: AiBatchViewModel, modifier: Modifier) {
-    Surface(border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), shape = RoundedCornerShape(6.dp), modifier = modifier) {
+    Surface(
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shape = RoundedCornerShape(6.dp),
+        modifier = modifier,
+    ) {
         Column(Modifier.fillMaxSize().padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("候选卡片", fontWeight = FontWeight.Bold)
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -210,7 +314,7 @@ private fun CandidatePane(state: AiBatchUiState, viewModel: AiBatchViewModel, mo
             }
             val group = state.groups.getOrNull(state.groupIndex)
             if (group == null) {
-                Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) { Text("生成后将在这里追加候选") }
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("生成后将在这里追加候选") }
             } else {
                 LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     itemsIndexed(group.cards) { index, card ->
@@ -253,7 +357,9 @@ private fun PngPreview(bytes: ByteArray, modifier: Modifier) {
 
 private fun readDocument(context: android.content.Context, uri: Uri): ImportedAiFile {
     val name = uri.lastPathSegment?.substringAfterLast('/') ?: "未命名.txt"
-    require(name.substringAfterLast('.', "txt").lowercase() in setOf("txt", "md", "markdown")) { "不支持的文件类型：$name" }
+    require(name.substringAfterLast('.', "txt").lowercase() in setOf("txt", "md", "markdown")) {
+        "不支持的文件类型：$name"
+    }
     val content = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
         ?: error("无法读取文件：$name")
     return ImportedAiFile(name, content)
@@ -264,8 +370,9 @@ private fun readTree(context: android.content.Context, root: DocumentFile): List
     fun visit(node: DocumentFile, prefix: String) {
         node.listFiles().sortedBy { it.name.orEmpty() }.forEach { child ->
             val name = child.name ?: return@forEach
-            if (child.isDirectory) visit(child, "$prefix$name/")
-            else if (name.substringAfterLast('.', "txt").lowercase() in setOf("txt", "md", "markdown")) {
+            if (child.isDirectory) {
+                visit(child, "$prefix$name/")
+            } else if (name.substringAfterLast('.', "txt").lowercase() in setOf("txt", "md", "markdown")) {
                 val content = context.contentResolver.openInputStream(child.uri)?.bufferedReader()?.use { it.readText() }
                     ?: error("无法读取文件：$prefix$name")
                 result += ImportedAiFile("$prefix$name", content)

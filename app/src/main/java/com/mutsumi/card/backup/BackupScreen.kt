@@ -60,11 +60,19 @@ import android.graphics.BitmapFactory
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.mutsumi.card.ui.components.FeedbackController
 
 @Composable
-fun BackupScreen(viewModel: BackupViewModel, modifier: Modifier = Modifier) {
+fun BackupScreen(
+    viewModel: BackupViewModel,
+    feedback: FeedbackController,
+    modifier: Modifier = Modifier,
+) {
     val context = LocalContext.current
     val state by viewModel.state.collectAsStateWithLifecycle()
+    LaunchedEffect(state.errorMessage) {
+        state.errorMessage?.let { feedback.show(it) }
+    }
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/zip"),
     ) { uri: Uri? ->

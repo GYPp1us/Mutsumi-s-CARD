@@ -17,11 +17,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.mutsumi.card.backup.BackupScreen
-import com.mutsumi.card.backup.BackupViewModel
 import com.mutsumi.card.ai.AiBatchScreen
 import com.mutsumi.card.ai.AiBatchViewModel
 import com.mutsumi.card.ai.AiSettingsScreen
+import com.mutsumi.card.backup.BackupScreen
+import com.mutsumi.card.backup.BackupViewModel
 import com.mutsumi.card.cards.CardsCallbacks
 import com.mutsumi.card.cards.CardsContextPane
 import com.mutsumi.card.cards.CardsEvent
@@ -34,11 +34,11 @@ import com.mutsumi.card.domain.workflow.MemoryCard
 import com.mutsumi.card.draw.DrawScreen
 import com.mutsumi.card.study.StudyScreen
 import com.mutsumi.card.ui.adaptive.AdaptiveLayoutPolicy
-import com.mutsumi.card.ui.adaptive.AppLayoutMode
 import com.mutsumi.card.ui.adaptive.AdaptiveScaffold
 import com.mutsumi.card.ui.components.FeedbackController
 import com.mutsumi.card.ui.components.FeedbackHost
 import com.mutsumi.card.ui.navigation.AppDestination
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -71,8 +71,14 @@ fun MutsumiCardApp(appContainer: AppContainer) {
     }
 
     LaunchedEffect(appContainer) {
-        appContainer.initializeDefaultSeed(context)
-        selectedDeckId = appContainer.ensureSelectedDeck()
+        try {
+            appContainer.initializeDefaultSeed(context)
+            selectedDeckId = appContainer.ensureSelectedDeck()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            feedback.show("应用初始化失败：${error.message ?: "无法准备本地数据"}")
+        }
     }
     LaunchedEffect(cardsViewModel) {
         cardsViewModel.events.collect { event ->
@@ -108,7 +114,9 @@ fun MutsumiCardApp(appContainer: AppContainer) {
                     modifier = Modifier,
                 )
             }
-        } else null
+        } else {
+            null
+        }
         AdaptiveScaffold(
             selected = selected,
             onSelect = { selectedName = it.name },
@@ -126,23 +134,33 @@ fun MutsumiCardApp(appContainer: AppContainer) {
                 )
                 AppDestination.Draw -> DrawScreen { key, image ->
                     val deckId = selectedDeckId.takeIf { it > 0 } ?: cardsState.currentDeck?.id
-                    requireNotNull(deckId) { "当前没有可用卡组" }
-                    selectedDeckId = deckId
-                    scope.launch {
-                        appContainer.cardRepository.saveCard(
-                            deckId = deckId,
-                            keyText = key,
-                            frontPng = image.frontPngBytes,
-                            backPng = image.backPngBytes,
-                        )
-                        feedback.show("卡片已保存：$key")
-                        selectedName = AppDestination.Study.name
+                    if (deckId == null) {
+                        scope.launch { feedback.show("卡片保存失败：当前没有可用卡组") }
+                        "当前没有可用卡组"
+                    } else {
+                        selectedDeckId = deckId
+                        scope.launch {
+                            try {
+                                appContainer.cardRepository.saveCard(
+                                    deckId = deckId,
+                                    keyText = key,
+                                    frontPng = image.frontPngBytes,
+                                    backPng = image.backPngBytes,
+                                )
+                                feedback.show("卡片已保存：$key")
+                                selectedName = AppDestination.Study.name
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (error: Exception) {
+                                feedback.show("卡片保存失败：${error.message ?: "未知错误"}")
+                            }
+                        }
+                        "正在保存卡片"
                     }
-                    "正在保存卡片"
                 }
-                AppDestination.Backup -> BackupScreen(backupViewModel)
-                AppDestination.AiBatch -> AiBatchScreen(aiViewModel)
-                AppDestination.Settings -> AiSettingsScreen(requireNotNull(appContainer.aiSettingsStore))
+                AppDestination.Backup -> BackupScreen(backupViewModel, feedback)
+                AppDestination.AiBatch -> AiBatchScreen(aiViewModel, feedback)
+                AppDestination.Settings -> AiSettingsScreen(requireNotNull(appContainer.aiSettingsStore), feedback)
             }
         }
     }
@@ -170,9 +188,15 @@ private fun StudyDestination(appContainer: AppContainer, deckId: Long, feedback:
     val imageRoot = cards.firstOrNull()?.let { appContainer.imageStore.resolve(it.valueImagePath).parentFile?.parentFile } ?: File(".")
     StudyScreen(legacyCards, currentId, imageRoot) { cardId, result ->
         scope.launch {
-            appContainer.cardRepository.applyFeedback(cardId, result, System.currentTimeMillis())
-            currentId = appContainer.cardRepository.pickRecommendedCard(deckId, listOf(cardId))?.id
-            feedback.show(if (result == ReviewFeedback.Know) "记住了，已切换下一张" else "已记录本次反馈")
+            try {
+                appContainer.cardRepository.applyFeedback(cardId, result, System.currentTimeMillis())
+                currentId = appContainer.cardRepository.pickRecommendedCard(deckId, listOf(cardId))?.id
+                feedback.show(if (result == ReviewFeedback.Know) "记住了，已切换下一张" else "已记录本次反馈")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                feedback.show("记录复习反馈失败：${error.message ?: "未知错误"}")
+            }
         }
         "正在记录"
     }

@@ -1,5 +1,7 @@
 package com.mutsumi.card.ai
 
+import android.util.Log
+import com.mutsumi.card.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -31,26 +33,37 @@ class OpenAiBatchClient(
         context: String,
         parameters: AiGenerationParameters,
         onGroup: suspend (AiRawGroup) -> Unit,
+        onProgress: (sentCharacters: Int, receivedCharacters: Int) -> Unit = { _, _ -> },
     ) = withContext(Dispatchers.IO) {
         require(settings.apiKey.isNotBlank()) { "请先在设置中填写 AI API Key" }
-        require(parameters.groupCount > 0 && parameters.candidatesPerGroup > 0) { "生成数量必须大于 0" }
+        require(parameters.candidatesPerGroup in 1..5) { "每组候选数量必须在 1 到 5 之间" }
         require(context.length <= MAX_CONTEXT_CHARS) { "AI 上下文超过 100K 字符" }
-        val endpoint = settings.endpoint.trimEnd('/').let { if (it.endsWith("/chat/completions")) it else "$it/chat/completions" }
-        val request = Request.Builder()
-            .url(endpoint)
-            .header("Authorization", "Bearer ${settings.apiKey}")
-            .header("Content-Type", "application/json")
-            .post(buildRequest(settings, context, parameters).toString().toRequestBody("application/json".toMediaType()))
-            .build()
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw AiGenerationException("AI 请求失败：HTTP ${response.code}")
+        val requestCharacters = buildRequest(settings, context, parameters).toString().length
+        onProgress(requestCharacters, 0)
+        val endpoints = endpointCandidates(settings.endpoint)
+        var response = executeRequest(endpoints.first(), settings, context, parameters)
+        if (response.code == 404 && endpoints.size > 1) {
+            response.close()
+            response = executeRequest(endpoints[1], settings, context, parameters)
+        }
+        response.use { response ->
+            if (!response.isSuccessful) {
+                val detail = response.body?.string()?.trim()?.take(2000)?.takeIf { it.isNotEmpty() }
+                val suffix = detail?.let { "：$it" }.orEmpty()
+                throw AiGenerationException("AI 请求失败：HTTP ${response.code} ${response.message}$suffix")
+            }
             val body = response.body ?: throw AiGenerationException("AI 返回为空")
             val arguments = linkedMapOf<Int, StringBuilder>()
+            var receivedCharacters = 0
             body.charStream().buffered().forEachLine { line ->
+                receivedCharacters += line.length
+                onProgress(requestCharacters, receivedCharacters)
                 if (!line.startsWith("data:")) return@forEachLine
                 val payload = line.removePrefix("data:").trim()
                 if (payload == "[DONE]") return@forEachLine
-                val root = try { json.parseToJsonElement(payload).jsonObject } catch (error: Exception) {
+                val root = try {
+                    json.parseToJsonElement(payload).jsonObject
+                } catch (error: Exception) {
                     throw AiGenerationException("AI 流数据 JSON 无效", error)
                 }
                 val choice = root["choices"]?.jsonArray?.firstOrNull()?.jsonObject
@@ -61,7 +74,8 @@ class OpenAiBatchClient(
                 calls.forEach { element ->
                     val call = element.jsonObject
                     val index = call["index"]?.jsonPrimitive?.intOrNull ?: 0
-                    val fragment = call["function"]?.jsonObject?.get("arguments")?.jsonPrimitive?.contentOrNull.orEmpty()
+                    val fragment = call["function"]?.jsonObject
+                        ?.get("arguments")?.jsonPrimitive?.contentOrNull.orEmpty()
                     arguments.getOrPut(index) { StringBuilder() }.append(fragment)
                 }
             }
@@ -69,19 +83,46 @@ class OpenAiBatchClient(
             val groups = arguments.toSortedMap().map { (index, raw) ->
                 parseGroup(index, raw.toString(), parameters)
             }
-            require(groups.size == parameters.groupCount) {
-                "tool 返回 ${groups.size} 组，期望 ${parameters.groupCount} 组"
+            require(parameters.groupCountRange.accepts(groups.size)) {
+                "tool 返回 ${groups.size} 组，期望范围 ${parameters.groupCountRange.label}"
             }
             require(groups.map { it.index }.toSet().size == groups.size) {
                 "tool 返回了重复的 group_index"
             }
-            require(groups.map { it.index }.toSet() == (1..parameters.groupCount).toSet()) {
-                "tool group_index 不完整"
+            require(groups.map { it.index }.toSet() == (1..groups.size).toSet()) {
+                "tool group_index 必须从 1 连续编号"
             }
             groups.sortedBy { it.index }.forEach { group ->
                 delay(4000)
                 onGroup(group)
             }
+        }
+    }
+
+    private fun executeRequest(
+        endpoint: String,
+        settings: AiSettings,
+        context: String,
+        parameters: AiGenerationParameters,
+    ) = client.newCall(
+        Request.Builder()
+            .url(endpoint)
+            .header("Authorization", "Bearer ${settings.apiKey}")
+            .header("Content-Type", "application/json")
+            .post(buildRequest(settings, context, parameters).toString().toRequestBody("application/json".toMediaType()))
+            .build(),
+    ).execute()
+
+    private fun endpointCandidates(rawEndpoint: String): List<String> {
+        val endpoint = rawEndpoint.trim().trimEnd('/')
+        require(endpoint.isNotEmpty()) { "AI 地址不能为空" }
+        return when {
+            endpoint.endsWith("/chat/completions") -> listOf(endpoint)
+            endpoint.endsWith("/v1") -> listOf("$endpoint/chat/completions")
+            else -> listOf(
+                "$endpoint/chat/completions",
+                "$endpoint/v1/chat/completions",
+            ).distinct()
         }
     }
 
@@ -98,8 +139,8 @@ class OpenAiBatchClient(
                 put(
                     "content",
                     "你是记忆卡片编辑助手。只调用 generate_card_group 工具。" +
-                        "请生成 ${parameters.groupCount} 组，每组 ${parameters.candidatesPerGroup} 张中文双面 Markdown 卡片。" +
-                        "group_index 从 1 开始且每组只调用一次；不得输出空字段。",
+                        "请生成 ${parameters.groupCountRange.label} 组，每组 ${parameters.candidatesPerGroup} 张中文双面 Markdown 卡片。" +
+                        "group_index 从 1 开始连续编号，每组只调用一次；不得输出空字段。",
                 )
             })
             add(buildJsonObject { put("role", "user"); put("content", context) })
@@ -125,38 +166,65 @@ class OpenAiBatchClient(
                                         put("front_markdown", buildJsonObject { put("type", "string") })
                                         put("back_markdown", buildJsonObject { put("type", "string") })
                                     })
-                                    put("required", buildJsonArray { add(JsonPrimitive("key_text")); add(JsonPrimitive("front_markdown")); add(JsonPrimitive("back_markdown")) })
+                                    put("required", buildJsonArray {
+                                        add(JsonPrimitive("key_text"))
+                                        add(JsonPrimitive("front_markdown"))
+                                        add(JsonPrimitive("back_markdown"))
+                                    })
                                 })
                             })
                         })
-                        put("required", buildJsonArray { add(JsonPrimitive("group_index")); add(JsonPrimitive("cards")) })
+                        put("required", buildJsonArray {
+                            add(JsonPrimitive("group_index"))
+                            add(JsonPrimitive("cards"))
+                        })
                     })
                 })
             })
         })
-        put("tool_choice", buildJsonObject { put("type", "function"); put("function", buildJsonObject { put("name", "generate_card_group") }) })
     }
 
     private fun parseGroup(index: Int, raw: String, parameters: AiGenerationParameters): AiRawGroup {
-        val root = try { json.parseToJsonElement(raw).jsonObject } catch (error: Exception) {
-            throw AiGenerationException("tool 参数 JSON 无效", error)
+        val root = try {
+            json.parseToJsonElement(raw).jsonObject
+        } catch (error: Exception) {
+            if (BuildConfig.DEBUG) {
+                val preview = raw.take(240).replace("\n", "\\n").replace("\r", "\\r")
+                val suffix = raw.takeLast(240).replace("\n", "\\n").replace("\r", "\\r")
+                Log.e(
+                    LOG_TAG,
+                    "tool 参数 JSON 无效：长度=${raw.length}，前缀=$preview，后缀=$suffix",
+                    error,
+                )
+            }
+            throw AiGenerationException(
+                "tool 参数 JSON 无效：${error.message ?: "未知 JSON 错误"}",
+                error,
+            )
         }
         val cards = root["cards"]?.jsonArray ?: throw AiGenerationException("tool 缺少 cards")
         require(cards.size == parameters.candidatesPerGroup) {
             "tool 返回 ${cards.size} 张卡片，期望 ${parameters.candidatesPerGroup} 张"
         }
         val groupIndex = root["group_index"]?.jsonPrimitive?.intOrNull ?: index + 1
-        require(groupIndex in 1..parameters.groupCount) { "tool group_index 超出范围：$groupIndex" }
+        require(groupIndex > 0) { "tool group_index 必须大于 0：$groupIndex" }
         return AiRawGroup(groupIndex, cards.map { element ->
             val card = element.jsonObject
-            AiRawCard(card.requiredText("key_text"), card.requiredText("front_markdown"), card.requiredText("back_markdown"))
+            AiRawCard(
+                card.requiredText("key_text"),
+                card.requiredText("front_markdown"),
+                card.requiredText("back_markdown"),
+            )
         })
     }
 
     private fun JsonObject.requiredText(name: String): String = get(name)?.jsonPrimitive?.contentOrNull?.trim()
         ?.takeIf { it.isNotEmpty() } ?: throw AiGenerationException("tool 字段为空：$name")
 
-    private companion object { const val MAX_CONTEXT_CHARS = 100_000 }
+    private companion object {
+        const val MAX_CONTEXT_CHARS = 100_000
+        const val LOG_TAG = "MutsumiCard.AI"
+    }
 }
 
 data class AiRawGroup(val index: Int, val cards: List<AiRawCard>)

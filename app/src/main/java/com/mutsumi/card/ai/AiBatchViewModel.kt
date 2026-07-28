@@ -1,17 +1,17 @@
 package com.mutsumi.card.ai
 
-import android.graphics.Bitmap
 import android.content.Context
+import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mutsumi.card.data.CardRepository
 import com.mutsumi.card.draw.DrawingCanvasSpec
 import com.mutsumi.card.draw.MarkdownLayerRenderer
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
 
@@ -26,19 +26,28 @@ class AiBatchViewModel(
 
     init {
         viewModelScope.launch {
-            val decks = repository.decks.first()
-            mutableState.value = mutableState.value.copy(
-                settings = settingsStore.load(),
-                decks = decks,
-                parameters = mutableState.value.parameters.copy(targetDeckId = decks.firstOrNull()?.id ?: 0L),
-            )
+            try {
+                val decks = repository.decks.first()
+                mutableState.value = mutableState.value.copy(
+                    settings = settingsStore.load(),
+                    decks = decks,
+                    parameters = mutableState.value.parameters.copy(targetDeckId = decks.firstOrNull()?.id ?: 0L),
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                showError("AI 页面初始化失败：${error.message ?: "无法读取本地设置或卡组"}")
+            }
         }
     }
 
     fun setRawText(value: String) { update { copy(rawText = value, rawTextEdited = true) } }
     fun showMessage(value: String) { update { copy(message = value) } }
+    fun showError(value: String) { update { copy(message = value, errorMessage = value) } }
     fun setParameters(parameters: AiGenerationParameters) { update { copy(parameters = parameters) } }
-    fun selectGroup(index: Int) { update { copy(groupIndex = index.coerceIn(0, groups.lastIndex.coerceAtLeast(0)), selectedCardIndex = 0) } }
+    fun selectGroup(index: Int) {
+        update { copy(groupIndex = index.coerceIn(0, groups.lastIndex.coerceAtLeast(0)), selectedCardIndex = 0) }
+    }
     fun selectCard(index: Int) { update { copy(selectedCardIndex = index.coerceAtLeast(0)) } }
 
     fun setImportedFiles(files: List<ImportedAiFile>) {
@@ -48,16 +57,37 @@ class AiBatchViewModel(
 
     fun saveSettings(settings: AiSettings) {
         viewModelScope.launch {
-            settingsStore.save(settings)
-            update { copy(settings = settings, message = "AI 设置已保存") }
+            try {
+                settingsStore.save(settings)
+                update { copy(settings = settings, message = "AI 设置已保存", errorMessage = null) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                showError("AI 设置保存失败：${error.message ?: "未知错误"}")
+            }
         }
     }
 
     fun createDeck(name: String) {
         viewModelScope.launch {
-            val id = repository.createDeck(name)
-            val decks = repository.decks.first()
-            update { copy(decks = decks, parameters = parameters.copy(targetDeckId = id), message = "已创建卡组：$name") }
+            try {
+                val normalized = name.trim()
+                require(normalized.isNotEmpty()) { "卡组名称不能为空" }
+                val id = repository.createDeck(normalized)
+                val decks = repository.decks.first()
+                update {
+                    copy(
+                        decks = decks,
+                        parameters = parameters.copy(targetDeckId = id),
+                        message = "已创建卡组：$normalized",
+                        errorMessage = null,
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                showError("创建卡组失败：${error.message ?: "未知错误"}")
+            }
         }
     }
 
@@ -65,54 +95,87 @@ class AiBatchViewModel(
         val current = mutableState.value
         if (current.isGenerating || current.isSaving) return
         viewModelScope.launch {
-            val contextResult = buildContext(current)
-            update {
-                copy(
-                    isGenerating = true,
-                    message = "正在等待 AI 生成",
-                    contextWarning = if (contextResult.wasTruncated) "上下文超过 100K 字符，已截断到 100K" else null,
-                )
-            }
             try {
-                client.generate(current.settings, contextResult.text, current.parameters) { rawGroup ->
-                    val group = rawGroup.toCandidateGroup()
-                    update {
-                        copy(
-                            groups = groups + group,
-                            message = "已收到第 ${groups.size + 1} 组候选",
-                        )
-                    }
+                val contextResult = buildContext(current)
+                update {
+                    copy(
+                        isGenerating = true,
+                        message = "正在等待 AI 生成",
+                        errorMessage = null,
+                        contextWarning = if (contextResult.wasTruncated) {
+                            "上下文超过 100K 字符，已截断到 100K"
+                        } else {
+                            null
+                        },
+                    )
                 }
+                client.generate(
+                    settings = current.settings,
+                    context = contextResult.text,
+                    parameters = current.parameters,
+                    onGroup = { rawGroup ->
+                        val group = rawGroup.toCandidateGroup()
+                        update { copy(groups = groups + group) }
+                    },
+                    onProgress = { sentCharacters, receivedCharacters ->
+                        update {
+                            copy(message = "正在生成：↑$sentCharacters,↓$receivedCharacters")
+                        }
+                    },
+                )
                 update { copy(isGenerating = false, message = "候选生成完成") }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: AiGenerationException) {
-                update { copy(isGenerating = false, message = "生成失败：${error.message ?: "未知错误"}") }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                val message = "生成失败：${error.message ?: "未知错误"}"
+                update { copy(isGenerating = false, message = message, errorMessage = message) }
             }
         }
     }
 
     fun saveCurrentAndNext() {
         val current = mutableState.value
-        val group = current.groups.getOrNull(current.groupIndex) ?: return
-        val candidate = group.cards.getOrNull(current.selectedCardIndex) ?: return
-        val deckId = current.parameters.targetDeckId.takeIf { it > 0 } ?: current.decks.firstOrNull()?.id ?: return
+        val group = current.groups.getOrNull(current.groupIndex)
+        if (group == null) {
+            showError("保存失败：当前没有可保存的候选组")
+            return
+        }
+        val candidate = group.cards.getOrNull(current.selectedCardIndex)
+        if (candidate == null) {
+            showError("保存失败：请先选择一张候选卡片")
+            return
+        }
+        val deckId = current.parameters.targetDeckId.takeIf { it > 0 } ?: current.decks.firstOrNull()?.id
+        if (deckId == null) {
+            showError("保存失败：请先选择目标卡组")
+            return
+        }
         viewModelScope.launch {
-            update { copy(isSaving = true, message = "正在保存卡片") }
+            update { copy(isSaving = true, message = "正在保存卡片", errorMessage = null) }
             try {
                 repository.saveCard(deckId, candidate.keyText, candidate.frontPng, candidate.backPng)
                 val next = (current.groupIndex + 1).coerceAtMost(current.groups.lastIndex.coerceAtLeast(0))
-                update { copy(isSaving = false, groupIndex = next, selectedCardIndex = 0, message = "已保存：${candidate.keyText}") }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: IllegalArgumentException) {
-                update { copy(isSaving = false, message = "保存失败：${error.message ?: "未知错误"}") }
+                update {
+                    copy(
+                        isSaving = false,
+                        groupIndex = next,
+                        selectedCardIndex = 0,
+                        message = "已保存：${candidate.keyText}",
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                val message = "保存失败：${error.message ?: "未知错误"}"
+                update { copy(isSaving = false, message = message, errorMessage = message) }
             }
         }
     }
 
     fun previousGroup() { update { copy(groupIndex = (groupIndex - 1).coerceAtLeast(0), selectedCardIndex = 0) } }
-    fun nextGroup() { update { copy(groupIndex = (groupIndex + 1).coerceAtMost(groups.lastIndex.coerceAtLeast(0)), selectedCardIndex = 0) } }
+    fun nextGroup() {
+        update { copy(groupIndex = (groupIndex + 1).coerceAtMost(groups.lastIndex.coerceAtLeast(0)), selectedCardIndex = 0) }
+    }
 
     private fun buildContext(state: AiBatchUiState): ContextBuildResult {
         val sources = when {
@@ -121,14 +184,18 @@ class AiBatchViewModel(
             else -> state.files
         }
         val builder = StringBuilder()
-        builder.append("system prompt：生成双面 Markdown 记忆卡片。\n")
+        builder.append("system prompt：生成双面 Markdown 记忆卡片；卡组数量范围=")
+            .append(state.parameters.groupCountRange.label)
+            .append("；每组候选数量=")
+            .append(state.parameters.candidatesPerGroup)
+            .append('\n')
         builder.append("文件列表：\n")
         sources.forEach { builder.append("- ").append(it.name).append('\n') }
         sources.forEach {
             builder.append("\n文件内容：").append(it.name).append('\n')
                 .append(it.content).append('\n')
         }
-        builder.append("\n生成参数：卡片组数量=").append(state.parameters.groupCount)
+        builder.append("\n生成参数：卡组数量范围=").append(state.parameters.groupCountRange.label)
             .append("，每组候选数量=").append(state.parameters.candidatesPerGroup)
             .append("，目标卡组=").append(state.parameters.targetDeckId).append('\n')
         val fullText = builder.toString()

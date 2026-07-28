@@ -1,5 +1,19 @@
 package com.mutsumi.card.ai
 
+enum class AiGroupCountRange(
+    val label: String,
+    val minimum: Int,
+    val maximum: Int?,
+) {
+    OneToFive("1-5", 1, 5),
+    FiveToTen("5-10", 5, 10),
+    TenToTwenty("10-20", 10, 20),
+    TwentyPlus("20+", 20, null),
+    ;
+
+    fun accepts(count: Int): Boolean = count >= minimum && (maximum == null || count <= maximum)
+}
+
 data class ImportedAiFile(val name: String, val content: String)
 
 data class AiCardCandidate(
@@ -13,7 +27,7 @@ data class AiCardCandidate(
 data class AiCandidateGroup(val index: Int, val cards: List<AiCardCandidate>)
 
 data class AiGenerationParameters(
-    val groupCount: Int = 3,
+    val groupCountRange: AiGroupCountRange = AiGroupCountRange.OneToFive,
     val candidatesPerGroup: Int = 3,
     val targetDeckId: Long = 0L,
 )
@@ -30,6 +44,7 @@ data class AiBatchUiState(
     val isGenerating: Boolean = false,
     val isSaving: Boolean = false,
     val message: String = "",
+    val errorMessage: String? = null,
     val contextWarning: String? = null,
     val rawTextEdited: Boolean = false,
 )

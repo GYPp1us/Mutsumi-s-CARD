@@ -124,23 +124,72 @@ data class CloudRestorePreview(
     val deletionWarning: String? = null,
 )
 
+/**
+ * Applies to records which changed on both devices since the last successful sync.
+ *
+ * A single choice for the whole conflict set is intentional: deck, card and review
+ * records have referential relationships, so allowing an arbitrary mixed selection
+ * can create a card that has no surviving deck.
+ */
+enum class CloudConflictResolution {
+    KeepLocal,
+    UseCloud,
+}
+
+enum class CloudConflictKind(val label: String) {
+    Deck("卡组"),
+    Card("卡片"),
+    Review("复习状态"),
+}
+
+data class CloudConflict(
+    val key: String,
+    val kind: CloudConflictKind,
+    val localSummary: String,
+    val cloudSummary: String,
+    /** 仅用于确认重试时验证同一份冲突，不展示给用户。 */
+    val fingerprint: String = "$localSummary\u0000$cloudSummary",
+)
+
+sealed interface CloudConflictAction {
+    data class Backup(val pushDelete: Boolean) : CloudConflictAction
+    data class PreviewRestore(val snapshotId: String, val pullDelete: Boolean) : CloudConflictAction
+    data class Restore(val snapshotId: String, val pullDelete: Boolean) : CloudConflictAction
+}
+
+data class PendingCloudConflict(
+    val conflicts: List<CloudConflict>,
+    val action: CloudConflictAction,
+)
+
 class CloudConflictException(
-    val conflicts: List<String>,
-) : IOException("检测到本地与云端同时修改：${conflicts.joinToString("、")}")
+    val entries: List<CloudConflict>,
+) : IOException("检测到本地与云端同时修改：${entries.joinToString("、") { it.key }}") {
+    val conflicts: List<String> = entries.map(CloudConflict::key)
+}
 
 class CloudBackupException(message: String, cause: Throwable? = null) : IOException(message, cause)
 
 interface CloudBackupOperations {
     suspend fun inspect(config: CloudBackupConfig): CloudBackupOverview
-    suspend fun backup(config: CloudBackupConfig, pushDelete: Boolean = false): CloudBackupResult
+    suspend fun backup(
+        config: CloudBackupConfig,
+        pushDelete: Boolean = false,
+        conflictResolution: CloudConflictResolution? = null,
+        expectedConflicts: List<CloudConflict>? = null,
+    ): CloudBackupResult
     suspend fun previewRestore(
         config: CloudBackupConfig,
         snapshotId: String,
         pullDelete: Boolean = false,
+        conflictResolution: CloudConflictResolution? = null,
+        expectedConflicts: List<CloudConflict>? = null,
     ): CloudRestorePreview
     suspend fun restore(
         config: CloudBackupConfig,
         snapshotId: String,
         pullDelete: Boolean = false,
+        conflictResolution: CloudConflictResolution? = null,
+        expectedConflicts: List<CloudConflict>? = null,
     ): ImportSummary
 }

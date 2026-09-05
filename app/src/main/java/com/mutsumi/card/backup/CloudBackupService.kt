@@ -13,6 +13,9 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.intOrNull
 import okhttp3.OkHttpClient
 import java.io.File
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.UUID
 
 class RepositoryCloudBackupOperations(
@@ -25,6 +28,35 @@ class RepositoryCloudBackupOperations(
     private val idGenerator: () -> String = { UUID.randomUUID().toString() },
     private val remoteFactory: (CloudBackupConfig) -> CloudRemoteStore = { config -> WebDavClient(config, client) },
 ) : CloudBackupOperations {
+    suspend fun backup(
+        config: CloudBackupConfig,
+        pushDelete: Boolean = false,
+    ): CloudBackupResult = backup(config, pushDelete, conflictResolution = null, expectedConflicts = null)
+
+    suspend fun previewRestore(
+        config: CloudBackupConfig,
+        snapshotId: String,
+        pullDelete: Boolean = false,
+    ): CloudRestorePreview = previewRestore(
+        config,
+        snapshotId,
+        pullDelete,
+        conflictResolution = null,
+        expectedConflicts = null,
+    )
+
+    suspend fun restore(
+        config: CloudBackupConfig,
+        snapshotId: String,
+        pullDelete: Boolean = false,
+    ): ImportSummary = restore(
+        config,
+        snapshotId,
+        pullDelete,
+        conflictResolution = null,
+        expectedConflicts = null,
+    )
+
     override suspend fun inspect(config: CloudBackupConfig): CloudBackupOverview = withContext(Dispatchers.IO) {
         val remote = remoteFactory(config)
         val index = loadIndex(remote)
@@ -33,22 +65,56 @@ class RepositoryCloudBackupOperations(
         CloudBackupOverview(index.snapshots, stats(previous?.snapshot, current.document.snapshot))
     }
 
-    override suspend fun backup(config: CloudBackupConfig, pushDelete: Boolean): CloudBackupResult = withContext(Dispatchers.IO) {
+    override suspend fun backup(
+        config: CloudBackupConfig,
+        pushDelete: Boolean,
+        conflictResolution: CloudConflictResolution?,
+        expectedConflicts: List<CloudConflict>?,
+    ): CloudBackupResult = withContext(Dispatchers.IO) {
         val remote = remoteFactory(config)
-        val index = loadIndex(remote)
+        val loadedIndex = loadIndexWithVersion(remote)
+        val index = loadedIndex.index
         val current = repositoryOperations.loadCloudState()
         val previous = index.snapshots.firstOrNull()?.let { loadDocument(remote, it.id) }
-        checkConflicts(config, current.document.snapshot, previous?.snapshot)
-        val effective = if (pushDelete || previous == null) {
-            current.document.snapshot
-        } else {
-            mergeSnapshots(previous.snapshot, current.document.snapshot, localWins = true)
-        }
-        val refs = mergeImageReferences(previous?.images.orEmpty(), current.document.images)
-            .map { it.copy(sourcePath = null) }
-            .filter { reference -> effective.cards.any { it.valueImageSha256 == reference.sha256 || it.frontImageSha256 == reference.sha256 } }
+        val baseline = loadBaseline(config)?.snapshot
+        val conflicts = resolveConflicts(
+            baseline = baseline,
+            local = current.document.snapshot,
+            cloud = previous?.snapshot,
+            conflictResolution = conflictResolution,
+            expectedConflicts = expectedConflicts,
+        )
+        val effective = CloudConflictResolver.merge(
+            baseline = baseline,
+            local = current.document.snapshot,
+            cloud = previous?.snapshot ?: CloudSnapshot(emptyList(), emptyList(), emptyList()),
+            defaultResolution = CloudConflictResolution.KeepLocal,
+            deleteExtras = pushDelete,
+            conflicts = conflicts,
+            conflictResolution = conflictResolution,
+        )
+        val refs = imageReferencesFor(
+            effective,
+            mergeImageReferences(previous?.images.orEmpty(), current.document.images)
+                .map { it.copy(sourcePath = null) },
+        )
         val document = CloudSnapshotDocument(snapshot = effective, images = refs)
         validateDocument(document)
+
+        // 有效快照只要不同于本地，就必须先落到本地。这里不仅包含用户裁决的
+        // 冲突，也包含无冲突的云端独立改动；否则推进基线后，下次同步会把旧
+        // 本地状态误判为新改动并反向覆盖云端。
+        //
+        // 合并结果是此轮双方一致的完整状态，因此本地应用时镜像其中的删除，
+        // 而不是沿用“推送删除”的远端发布策略。
+        if (fingerprints(effective) != fingerprints(current.document.snapshot)) {
+            val images = loadImages(remote, document, current.bytesByHash)
+            repositoryOperations.applyCloudSnapshot(
+                snapshot = effective,
+                images = images,
+                deleteExtras = true,
+            )
+        }
         remote.ensureDirectories()
         current.bytesByHash.forEach { (hash, bytes) ->
             val path = "objects/$hash.png"
@@ -72,7 +138,15 @@ class RepositoryCloudBackupOperations(
         )
         val retained = (listOf(summary) + index.snapshots.filterNot { it.id == snapshotId }).take(CLOUD_BACKUP_WINDOW_SIZE)
         val expired = (listOf(summary) + index.snapshots.filterNot { it.id == snapshotId }).drop(CLOUD_BACKUP_WINDOW_SIZE)
-        remote.put("index.json", json.encodeToString(CloudBackupIndex(snapshots = retained)).encodeToByteArray(), "application/json; charset=utf-8")
+        val indexPublished = remote.putIfUnchanged(
+            path = "index.json",
+            bytes = json.encodeToString(CloudBackupIndex(snapshots = retained)).encodeToByteArray(),
+            contentType = "application/json; charset=utf-8",
+            expectedVersion = loadedIndex.version,
+        )
+        if (!indexPublished) {
+            throw CloudBackupException("云端索引已变化，未覆盖远端数据，请重新同步后再试")
+        }
         saveBaseline(config, snapshotId, effective)
         CloudBackupResult(CloudBackupOverview(retained, change), true, cleanupExpired(remote, expired, retained))
     }
@@ -81,19 +155,35 @@ class RepositoryCloudBackupOperations(
         config: CloudBackupConfig,
         snapshotId: String,
         pullDelete: Boolean,
+        conflictResolution: CloudConflictResolution?,
+        expectedConflicts: List<CloudConflict>?,
     ): CloudRestorePreview = withContext(Dispatchers.IO) {
         val remote = remoteFactory(config)
         val index = loadIndex(remote)
         require(index.snapshots.any { it.id == snapshotId }) { "云端版本不存在或已超出保留窗口" }
         val remoteDocument = loadDocument(remote, snapshotId)
         val local = repositoryOperations.loadCloudState()
-        checkConflicts(config, local.document.snapshot, remoteDocument.snapshot)
-        val effective = if (pullDelete) remoteDocument.snapshot else mergeSnapshots(local.document.snapshot, remoteDocument.snapshot, localWins = false)
-        val refs = if (pullDelete) {
-            remoteDocument.images
-        } else {
-            mergeImageReferences(local.document.images, remoteDocument.images)
-        }
+        val baseline = loadBaseline(config)?.snapshot
+        val conflicts = resolveConflicts(
+            baseline = baseline,
+            local = local.document.snapshot,
+            cloud = remoteDocument.snapshot,
+            conflictResolution = conflictResolution,
+            expectedConflicts = expectedConflicts,
+        )
+        val effective = CloudConflictResolver.merge(
+            baseline = baseline,
+            local = local.document.snapshot,
+            cloud = remoteDocument.snapshot,
+            defaultResolution = CloudConflictResolution.UseCloud,
+            deleteExtras = pullDelete,
+            conflicts = conflicts,
+            conflictResolution = conflictResolution,
+        )
+        val refs = imageReferencesFor(
+            effective,
+            mergeImageReferences(local.document.images, remoteDocument.images),
+        )
         val document = CloudSnapshotDocument(snapshot = effective, images = refs)
         val images = loadImages(remote, document, local.bytesByHash)
         val deckNames = effective.decks.associateBy { it.syncId }
@@ -118,21 +208,37 @@ class RepositoryCloudBackupOperations(
         config: CloudBackupConfig,
         snapshotId: String,
         pullDelete: Boolean,
+        conflictResolution: CloudConflictResolution?,
+        expectedConflicts: List<CloudConflict>?,
     ): ImportSummary = withContext(Dispatchers.IO) {
         val remote = remoteFactory(config)
         val index = loadIndex(remote)
         require(index.snapshots.any { it.id == snapshotId }) { "云端版本不存在或已超出保留窗口" }
         val remoteDocument = loadDocument(remote, snapshotId)
         val local = repositoryOperations.loadCloudState()
-        checkConflicts(config, local.document.snapshot, remoteDocument.snapshot)
-        val effective = if (pullDelete) remoteDocument.snapshot else mergeSnapshots(local.document.snapshot, remoteDocument.snapshot, localWins = false)
+        val baseline = loadBaseline(config)?.snapshot
+        val conflicts = resolveConflicts(
+            baseline = baseline,
+            local = local.document.snapshot,
+            cloud = remoteDocument.snapshot,
+            conflictResolution = conflictResolution,
+            expectedConflicts = expectedConflicts,
+        )
+        val effective = CloudConflictResolver.merge(
+            baseline = baseline,
+            local = local.document.snapshot,
+            cloud = remoteDocument.snapshot,
+            defaultResolution = CloudConflictResolution.UseCloud,
+            deleteExtras = pullDelete,
+            conflicts = conflicts,
+            conflictResolution = conflictResolution,
+        )
         val document = CloudSnapshotDocument(
             snapshot = effective,
-            images = if (pullDelete) {
-                remoteDocument.images
-            } else {
-                mergeImageReferences(local.document.images, remoteDocument.images)
-            },
+            images = imageReferencesFor(
+                effective,
+                mergeImageReferences(local.document.images, remoteDocument.images),
+            ),
         )
         val images = loadImages(remote, document, local.bytesByHash)
         val sourcePaths = document.images.mapNotNull { reference ->
@@ -141,7 +247,9 @@ class RepositoryCloudBackupOperations(
         val result = repositoryOperations.applyCloudSnapshot(
             effective,
             images,
-            deleteExtras = pullDelete,
+            // pullDelete 只参与三方合并时的取舍；effective 已是最终完整状态，
+            // 本地必须精确收敛，避免云端删除在推进基线后被下次同步复活。
+            deleteExtras = true,
             sourcePaths = sourcePaths,
         )
         saveBaseline(config, snapshotId, effective)
@@ -161,30 +269,23 @@ class RepositoryCloudBackupOperations(
         }
     }
 
-    private suspend fun checkConflicts(config: CloudBackupConfig, local: CloudSnapshot, remote: CloudSnapshot?) {
-        val baseline = loadBaseline(config) ?: return
-        if (remote == null) return
-        val base = fingerprints(baseline.snapshot)
-        val localFp = fingerprints(local)
-        val remoteFp = fingerprints(remote)
-        val conflicts = (base.keys + localFp.keys + remoteFp.keys).mapNotNull { key ->
-            if (localFp[key] != base[key] && remoteFp[key] != base[key] && localFp[key] != remoteFp[key]) key else null
+    private fun resolveConflicts(
+        baseline: CloudSnapshot?,
+        local: CloudSnapshot,
+        cloud: CloudSnapshot?,
+        conflictResolution: CloudConflictResolution?,
+        expectedConflicts: List<CloudConflict>?,
+    ): List<CloudConflict> {
+        val emptySnapshot = CloudSnapshot(emptyList(), emptyList(), emptyList())
+        val conflicts = CloudConflictResolver.findConflicts(
+            baseline = baseline ?: emptySnapshot,
+            local = local,
+            cloud = cloud ?: emptySnapshot,
+        )
+        if (conflicts.isNotEmpty() && (conflictResolution == null || expectedConflicts != null && conflicts != expectedConflicts)) {
+            throw CloudConflictException(conflicts)
         }
-        if (conflicts.isNotEmpty()) throw CloudConflictException(conflicts.take(20))
-    }
-
-    private fun mergeSnapshots(first: CloudSnapshot, second: CloudSnapshot, localWins: Boolean): CloudSnapshot {
-        val decks = mergeById(first.decks, second.decks, firstWins = false) { it.syncId }
-        val cards = mergeById(first.cards, second.cards, firstWins = false) { it.syncId }
-        val reviews = mergeById(first.reviews, second.reviews, firstWins = false) { it.cardSyncId }
-        return CloudSnapshot(decks, cards, reviews)
-    }
-
-    private fun <T> mergeById(first: List<T>, second: List<T>, firstWins: Boolean, key: (T) -> String): List<T> {
-        val result = linkedMapOf<String, T>()
-        first.forEach { result[key(it)] = it }
-        second.forEach { value -> if (!firstWins || key(value) !in result) result[key(value)] = value }
-        return result.values.toList()
+        return conflicts
     }
 
     private fun mergeImageReferences(first: List<CloudImageReference>, second: List<CloudImageReference>): List<CloudImageReference> {
@@ -194,6 +295,19 @@ class RepositoryCloudBackupOperations(
             result[reference.sha256] = reference.copy(sourcePath = reference.sourcePath ?: previous?.sourcePath)
         }
         return result.values.toList()
+    }
+
+    private fun imageReferencesFor(
+        snapshot: CloudSnapshot,
+        references: List<CloudImageReference>,
+    ): List<CloudImageReference> {
+        val hashes = snapshot.cards.flatMapTo(mutableSetOf()) { card ->
+            buildList {
+                add(card.valueImageSha256)
+                card.frontImageSha256?.let(::add)
+            }
+        }
+        return references.filter { it.sha256 in hashes }
     }
 
     private fun stats(previous: CloudSnapshot?, current: CloudSnapshot): CloudChangeStats {
@@ -219,8 +333,15 @@ class RepositoryCloudBackupOperations(
         return result
     }
 
-    private suspend fun loadIndex(remote: CloudRemoteStore): CloudBackupIndex {
-        val bytes = remote.get("index.json") ?: return CloudBackupIndex()
+    private suspend fun loadIndex(remote: CloudRemoteStore): CloudBackupIndex =
+        remote.get("index.json")?.let(::decodeIndex) ?: CloudBackupIndex()
+
+    private suspend fun loadIndexWithVersion(remote: CloudRemoteStore): CloudIndexWithVersion {
+        val remoteIndex = remote.getWithVersion("index.json") ?: return CloudIndexWithVersion(CloudBackupIndex(), null)
+        return CloudIndexWithVersion(decodeIndex(remoteIndex.bytes), remoteIndex.version)
+    }
+
+    private fun decodeIndex(bytes: ByteArray): CloudBackupIndex {
         val index = decode<CloudBackupIndex>(bytes, "云端索引")
         require(index.formatVersion in 1..CLOUD_BACKUP_FORMAT_VERSION) { "不支持的云端备份格式：${index.formatVersion}" }
         require(index.snapshots.size <= CLOUD_BACKUP_WINDOW_SIZE) { "云端索引版本数量异常" }
@@ -303,7 +424,16 @@ class RepositoryCloudBackupOperations(
         file.parentFile?.mkdirs()
         val temp = File(file.parentFile, ".${file.name}.pending")
         temp.writeText(json.encodeToString(CloudBaseline(configKey(config), snapshotId, snapshot)))
-        check(temp.renameTo(file)) { "无法保存云同步基线" }
+        try {
+            Files.move(
+                temp.toPath(),
+                file.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(temp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
     }
 
     private fun loadBaseline(config: CloudBackupConfig): CloudBaseline? {
@@ -327,6 +457,8 @@ class RepositoryCloudBackupOperations(
 
 @Serializable
 private data class CloudBaseline(val configKey: String, val snapshotId: String, val snapshot: CloudSnapshot)
+
+private data class CloudIndexWithVersion(val index: CloudBackupIndex, val version: String?)
 
 @Serializable
 private data class LegacyCloudSnapshotDocument(

@@ -10,6 +10,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -18,11 +19,16 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Archive
@@ -61,6 +67,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -87,6 +94,7 @@ import java.text.DateFormat
 import java.util.Date
 import java.io.IOException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 typealias CardImageContent = @Composable (MemoryCard, Modifier) -> Unit
@@ -105,7 +113,7 @@ data class CardsCallbacks(
     val onDelete: () -> Unit,
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun CardsScreen(
     uiState: CardsUiState,
@@ -116,16 +124,20 @@ fun CardsScreen(
 ) {
     var deckMenuOpen by remember { mutableStateOf(false) }
     var dialog by remember { mutableStateOf<DeckDialog?>(null) }
+    var searchFocused by remember { mutableStateOf(false) }
     val selectedCard = uiState.selectedCard
+    val imeVisible = WindowInsets.isImeVisible
 
     Column(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        CardsTopBar(
-            state = uiState,
-            enabled = !uiState.isBusy,
-            onOpenDecks = { deckMenuOpen = true },
-            onCreateDeck = { dialog = DeckDialog.Create },
-            onNewCard = callbacks.onNewCard,
-        )
+        if (!imeVisible || !searchFocused) {
+            CardsTopBar(
+                state = uiState,
+                enabled = !uiState.isBusy,
+                onOpenDecks = { deckMenuOpen = true },
+                onCreateDeck = { dialog = DeckDialog.Create },
+                onNewCard = callbacks.onNewCard,
+            )
+        }
         if (uiState.isBusy) {
             LinearProgressIndicator(Modifier.fillMaxWidth().testTag("卡片操作进行中"))
         }
@@ -156,7 +168,13 @@ fun CardsScreen(
                 )
             }
         }
-        SearchField(uiState.query, callbacks.onQueryChange, callbacks.onClearQuery, !uiState.isBusy)
+        SearchField(
+            query = uiState.query,
+            onQueryChange = callbacks.onQueryChange,
+            onClear = callbacks.onClearQuery,
+            onFocusChanged = { searchFocused = it },
+            enabled = !uiState.isBusy,
+        )
         when {
             uiState.isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
@@ -250,11 +268,21 @@ private fun CardsTopBar(
 }
 
 @Composable
-private fun SearchField(query: String, onQueryChange: (String) -> Unit, onClear: () -> Unit, enabled: Boolean) {
+private fun SearchField(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onClear: () -> Unit,
+    onFocusChanged: (Boolean) -> Unit,
+    enabled: Boolean,
+) {
     OutlinedTextField(
         value = query,
         onValueChange = onQueryChange,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp).height(48.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .heightIn(min = 56.dp)
+            .onFocusEvent { onFocusChanged(it.isFocused) },
         singleLine = true,
         enabled = enabled,
         placeholder = { Text("搜索文字 key") },
@@ -279,7 +307,8 @@ private fun CardListItem(
     Row(
         Modifier.fillMaxWidth().heightIn(min = minHeight)
             .background(if (selected) PrimaryGreenSoft.copy(alpha = 0.7f) else Color.Transparent)
-            .clickable(enabled = enabled, onClick = onClick),
+            .clickable(enabled = enabled, onClick = onClick)
+            .testTag("card-list-item"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.width(3.dp).height(minHeight).background(if (selected) PrimaryGreen else Color.Transparent))
@@ -415,6 +444,7 @@ private fun CardsEmptyState(
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 fun CardsContextPane(
     card: MemoryCard?,
     imageContent: CardImageContent,
@@ -440,32 +470,54 @@ fun CardsContextPane(
     var confirmDelete by remember(card.id) { mutableStateOf(false) }
     var confirmArchive by remember(card.id) { mutableStateOf(false) }
     var pendingSaveRevision by remember(card.id) { mutableStateOf<Long?>(null) }
+    val keyInputBringIntoViewRequester = remember { BringIntoViewRequester() }
+    val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
+    val contextListState = rememberLazyListState()
+    val imeVisible = WindowInsets.isImeVisible
     androidx.compose.runtime.LaunchedEffect(keySaveRevision) {
         if (pendingSaveRevision != null && keySaveRevision > requireNotNull(pendingSaveRevision)) {
             pendingSaveRevision = null
             editing = false
         }
     }
+    androidx.compose.runtime.LaunchedEffect(editing, imeVisible) {
+        if (editing) contextListState.scrollToItem(if (imeVisible) 0 else 1)
+    }
     BoxWithConstraints(modifier) {
         val compact = compactHeight || maxHeight <= 400.dp
         LazyColumn(
-            Modifier.fillMaxSize().padding(horizontal = if (compact) 10.dp else 16.dp, vertical = if (compact) 6.dp else 12.dp),
+            Modifier.fillMaxSize()
+                .padding(horizontal = if (compact) 10.dp else 16.dp, vertical = if (compact) 6.dp else 12.dp),
+            state = contextListState,
             horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            item {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("卡片详情", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                    IconButton(onClick = { editing = true }, enabled = !isBusy) { Icon(Icons.Default.Edit, "编辑 key") }
-                    IconButton(onClick = { confirmDelete = true }, enabled = !isBusy) {
-                        Icon(Icons.Default.Delete, "删除卡片", tint = DangerCoral)
+            if (!imeVisible) {
+                item {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("卡片详情", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                        IconButton(onClick = { editing = true }, enabled = !isBusy) { Icon(Icons.Default.Edit, "编辑 key") }
+                        IconButton(onClick = { confirmDelete = true }, enabled = !isBusy) {
+                            Icon(Icons.Default.Delete, "删除卡片", tint = DangerCoral)
+                        }
                     }
                 }
-                if (editing) {
+            }
+            if (editing) {
+                item {
                     OutlinedTextField(
                         value = draft,
                         onValueChange = { draft = it },
-                        modifier = Modifier.fillMaxWidth().testTag("key 编辑输入"),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                            .bringIntoViewRequester(keyInputBringIntoViewRequester)
+                            .onFocusEvent { focusState ->
+                                if (focusState.isFocused) {
+                                    coroutineScope.launch { keyInputBringIntoViewRequester.bringIntoView() }
+                                }
+                            }
+                            .testTag("key 编辑输入"),
                         label = { Text("文字 key") },
+                        maxLines = 3,
                         enabled = !isBusy,
                     )
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -479,11 +531,16 @@ fun CardsContextPane(
                         Button(
                             onClick = { pendingSaveRevision = keySaveRevision; onSaveKey(draft.text) },
                             enabled = draft.text.isNotBlank() && !isBusy && pendingSaveRevision == null,
+                            modifier = Modifier.testTag("save-card-key"),
                         ) { Text("保存") }
                     }
-                } else if (compact) {
+                }
+            } else if (compact) {
+                item {
                     CompactCardDetails(card, imageContent, isBusy, onRedraw, { confirmArchive = true })
-                } else {
+                }
+            } else {
+                item {
                     Text(card.keyText, style = MaterialTheme.typography.titleLarge, modifier = Modifier.fillMaxWidth())
                     Spacer(Modifier.height(12.dp))
                     imageContent(card, Modifier.width(150.dp).aspectRatio(DrawingCanvasSpec.aspectRatio).border(1.dp, StrongDivider, MaterialTheme.shapes.small))
@@ -571,7 +628,15 @@ private fun NameDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
-        text = { OutlinedTextField(value, { value = it }, label = { Text("卡组名称") }, singleLine = true) },
+        text = {
+            OutlinedTextField(
+                value = value,
+                onValueChange = { value = it },
+                label = { Text("卡组名称") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+            )
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
         confirmButton = { Button(onClick = { onConfirm(value) }, enabled = value.isNotBlank()) { Text("确定") } },
     )

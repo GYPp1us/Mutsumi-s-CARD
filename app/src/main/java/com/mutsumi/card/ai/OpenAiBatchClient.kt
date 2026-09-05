@@ -1,7 +1,5 @@
 package com.mutsumi.card.ai
 
-import android.util.Log
-import com.mutsumi.card.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -48,12 +46,17 @@ class OpenAiBatchClient(
         }
         response.use { response ->
             if (!response.isSuccessful) {
-                val detail = response.body?.string()?.trim()?.take(2000)?.takeIf { it.isNotEmpty() }
+                val detail = response.body?.string()
+                    ?.replace(settings.apiKey, "[已隐藏]")
+                    ?.trim()
+                    ?.take(2000)
+                    ?.takeIf { it.isNotEmpty() }
                 val suffix = detail?.let { "：$it" }.orEmpty()
                 throw AiGenerationException("AI 请求失败：HTTP ${response.code} ${response.message}$suffix")
             }
             val body = response.body ?: throw AiGenerationException("AI 返回为空")
             val arguments = linkedMapOf<Int, StringBuilder>()
+            val argumentBudget = AiGenerationResponseBudget()
             var receivedCharacters = 0
             body.charStream().buffered().forEachLine { line ->
                 receivedCharacters += line.length
@@ -73,9 +76,11 @@ class OpenAiBatchClient(
                     ?: emptyList()
                 calls.forEach { element ->
                     val call = element.jsonObject
-                    val index = call["index"]?.jsonPrimitive?.intOrNull ?: 0
+                    val index = call["index"]?.jsonPrimitive?.intOrNull
+                        ?: throw AiGenerationException("AI tool 调用缺少 index")
                     val fragment = call["function"]?.jsonObject
                         ?.get("arguments")?.jsonPrimitive?.contentOrNull.orEmpty()
+                    argumentBudget.append(index, fragment.length)
                     arguments.getOrPut(index) { StringBuilder() }.append(fragment)
                 }
             }
@@ -188,15 +193,6 @@ class OpenAiBatchClient(
         val root = try {
             json.parseToJsonElement(raw).jsonObject
         } catch (error: Exception) {
-            if (BuildConfig.DEBUG) {
-                val preview = raw.take(240).replace("\n", "\\n").replace("\r", "\\r")
-                val suffix = raw.takeLast(240).replace("\n", "\\n").replace("\r", "\\r")
-                Log.e(
-                    LOG_TAG,
-                    "tool 参数 JSON 无效：长度=${raw.length}，前缀=$preview，后缀=$suffix",
-                    error,
-                )
-            }
             throw AiGenerationException(
                 "tool 参数 JSON 无效：${error.message ?: "未知 JSON 错误"}",
                 error,
@@ -206,7 +202,8 @@ class OpenAiBatchClient(
         require(cards.size == parameters.candidatesPerGroup) {
             "tool 返回 ${cards.size} 张卡片，期望 ${parameters.candidatesPerGroup} 张"
         }
-        val groupIndex = root["group_index"]?.jsonPrimitive?.intOrNull ?: index + 1
+        val groupIndex = root["group_index"]?.jsonPrimitive?.intOrNull
+            ?: throw AiGenerationException("tool 缺少 group_index")
         require(groupIndex > 0) { "tool group_index 必须大于 0：$groupIndex" }
         return AiRawGroup(groupIndex, cards.map { element ->
             val card = element.jsonObject
@@ -223,9 +220,36 @@ class OpenAiBatchClient(
 
     private companion object {
         const val MAX_CONTEXT_CHARS = 100_000
-        const val LOG_TAG = "MutsumiCard.AI"
     }
 }
 
 data class AiRawGroup(val index: Int, val cards: List<AiRawCard>)
 data class AiRawCard(val keyText: String, val frontMarkdown: String, val backMarkdown: String)
+
+/** 为流式 tool 参数设置上限，避免异常服务返回无限长文本时堆积 StringBuilder。 */
+internal class AiGenerationResponseBudget(
+    private val maxCharactersPerGroup: Int = 160_000,
+    private val maxTotalCharacters: Int = 3_200_000,
+) {
+    private val groupCharacters = mutableMapOf<Int, Int>()
+    var totalCharacters: Int = 0
+        private set
+
+    init {
+        require(maxCharactersPerGroup > 0) { "单组 tool 参数上限必须大于零" }
+        require(maxTotalCharacters >= maxCharactersPerGroup) { "tool 参数总上限不能小于单组上限" }
+    }
+
+    fun append(groupIndex: Int, characterCount: Int) {
+        require(characterCount >= 0) { "tool 参数增量不能为负数" }
+        val groupTotal = (groupCharacters[groupIndex] ?: 0) + characterCount
+        if (groupTotal > maxCharactersPerGroup) {
+            throw AiGenerationException("AI 单个候选组内容超过 ${maxCharactersPerGroup} 字符上限")
+        }
+        if (totalCharacters + characterCount > maxTotalCharacters) {
+            throw AiGenerationException("AI tool 参数总长度超过 ${maxTotalCharacters} 字符上限")
+        }
+        groupCharacters[groupIndex] = groupTotal
+        totalCharacters += characterCount
+    }
+}

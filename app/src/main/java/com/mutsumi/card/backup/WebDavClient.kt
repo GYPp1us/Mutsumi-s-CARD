@@ -3,6 +3,7 @@ package com.mutsumi.card.backup
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Credentials
+import okhttp3.Headers
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -10,10 +11,15 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
+data class CloudRemoteFile(val bytes: ByteArray, val version: String?)
+
 interface CloudRemoteStore {
     suspend fun ensureDirectories()
     suspend fun get(path: String): ByteArray?
+    suspend fun getWithVersion(path: String): CloudRemoteFile?
     suspend fun put(path: String, bytes: ByteArray, contentType: String)
+    /** 仅当远端资源仍为 [expectedVersion] 时原子发布；null 表示资源必须尚不存在。 */
+    suspend fun putIfUnchanged(path: String, bytes: ByteArray, contentType: String, expectedVersion: String?): Boolean
     suspend fun delete(path: String)
 }
 
@@ -35,11 +41,13 @@ class WebDavClient(
         mkcol(listOf("objects"))
     }
 
-    override suspend fun get(path: String): ByteArray? = execute(
+    override suspend fun get(path: String): ByteArray? = getWithVersion(path)?.bytes
+
+    override suspend fun getWithVersion(path: String): CloudRemoteFile? = execute(
         Request.Builder().url(resolve(path)).get().authorized().build(),
-    ) { code, bytes ->
+    ) { code, bytes, headers ->
         when (code) {
-            200 -> bytes
+            200 -> CloudRemoteFile(bytes, headers["ETag"])
             404 -> null
             else -> throw responseError("读取", code)
         }
@@ -51,14 +59,41 @@ class WebDavClient(
             .put(bytes.toRequestBody(contentType.toMediaType()))
             .authorized()
             .build()
-        execute(request) { code, _ ->
+        execute(request) { code, _, _ ->
             if (code !in 200..204) throw responseError("上传", code)
+        }
+    }
+
+    override suspend fun putIfUnchanged(
+        path: String,
+        bytes: ByteArray,
+        contentType: String,
+        expectedVersion: String?,
+    ): Boolean {
+        val request = Request.Builder()
+            .url(resolve(path))
+            .put(bytes.toRequestBody(contentType.toMediaType()))
+            .authorized()
+            .apply {
+                if (expectedVersion == null) {
+                    header("If-None-Match", "*")
+                } else {
+                    header("If-Match", expectedVersion)
+                }
+            }
+            .build()
+        return execute(request) { code, _, _ ->
+            when (code) {
+                in 200..204 -> true
+                412 -> false
+                else -> throw responseError("发布索引", code)
+            }
         }
     }
 
     override suspend fun delete(path: String) {
         val request = Request.Builder().url(resolve(path)).delete().authorized().build()
-        execute(request) { code, _ ->
+        execute(request) { code, _, _ ->
             if (code !in 200..204 && code != 404) throw responseError("删除", code)
         }
     }
@@ -66,7 +101,7 @@ class WebDavClient(
     private suspend fun mkcol(segments: List<String>, includeRoot: Boolean = true) {
         val url = if (includeRoot) resolveSegments(rootSegments + segments) else resolveSegments(segments)
         val request = Request.Builder().url(url).method("MKCOL", null).authorized().build()
-        execute(request) { code, _ ->
+        execute(request) { code, _, _ ->
             if (code !in listOf(200, 201, 204, 405)) throw responseError("创建目录", code)
         }
     }
@@ -82,11 +117,11 @@ class WebDavClient(
 
     private fun Request.Builder.authorized(): Request.Builder = header("Authorization", authorization)
 
-    private suspend fun <T> execute(request: Request, consume: (Int, ByteArray) -> T): T =
+    private suspend fun <T> execute(request: Request, consume: (Int, ByteArray, Headers) -> T): T =
         withContext(Dispatchers.IO) {
             try {
                 client.newCall(request).execute().use { response ->
-                    consume(response.code, response.body?.bytes() ?: byteArrayOf())
+                    consume(response.code, response.body?.bytes() ?: byteArrayOf(), response.headers)
                 }
             } catch (error: CloudBackupException) {
                 throw error

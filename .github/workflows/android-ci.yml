@@ -1,4 +1,4 @@
-name: Android CI
+name: Android 持续集成
 
 on:
   push:
@@ -14,25 +14,25 @@ jobs:
     name: 编译并构建 APK
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: 拉取代码
         uses: actions/checkout@v7.0.0
 
-      - name: Set up JDK
+      - name: 设置 JDK
         uses: actions/setup-java@v5.4.0
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
+      - name: 设置 Android SDK
         uses: android-actions/setup-android@v4.0.1
 
-      - name: Install Android packages
+      - name: 安装 Android 包
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
-      - name: 运行单元测试并构建 Debug APK
-        run: bash gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
+      - name: 运行单元测试、静态检查并构建 Debug APK
+        run: bash gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebugAndroidTest :app:assembleDebug
 
-      - name: Upload debug APK
+      - name: 上传 Debug APK
         uses: actions/upload-artifact@v7.0.1
         with:
           name: mutsumi-card-debug-apk

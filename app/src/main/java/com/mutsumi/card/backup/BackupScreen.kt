@@ -9,8 +9,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -18,7 +20,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -45,12 +50,17 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -63,6 +73,7 @@ import java.util.Locale
 import com.mutsumi.card.ui.components.FeedbackController
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 fun BackupScreen(
     viewModel: BackupViewModel,
     feedback: FeedbackController,
@@ -116,25 +127,58 @@ fun BackupScreen(
             onConfirm = viewModel::confirmRestorePreview,
         )
     }
+    state.pendingCloudConflict?.let { pending ->
+        CloudConflictResolutionDialog(
+            pending = pending,
+            enabled = !state.isBusy,
+            onDismiss = viewModel::dismissCloudConflict,
+            onKeepLocal = { viewModel.resolveCloudConflict(CloudConflictResolution.KeepLocal) },
+            onUseCloud = { viewModel.resolveCloudConflict(CloudConflictResolution.UseCloud) },
+        )
+    }
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val wide = maxWidth >= 680.dp && maxWidth > maxHeight
+        val imeVisible = WindowInsets.isImeVisible
+        val cloudScrollState = rememberScrollState()
         if (wide) {
             Row(
                 modifier = Modifier.fillMaxSize().padding(16.dp),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 Column(
-                    modifier = Modifier.weight(1.2f).fillMaxSize().verticalScroll(rememberScrollState()),
+                    modifier = Modifier.weight(1.2f).fillMaxSize().verticalScroll(cloudScrollState)
+                        .testTag("backup-cloud-scroll"),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    PageHeading(state)
+                    if (!imeVisible) PageHeading(state)
                     CloudBackupSection(state, viewModel)
                 }
-                Column(
-                    modifier = Modifier.weight(0.8f).fillMaxSize().verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
+                if (!imeVisible) {
+                    Column(
+                        modifier = Modifier.weight(0.8f).fillMaxSize().verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        LocalBackupSection(
+                            enabled = !state.isBusy,
+                            onExport = { exportLauncher.launch("mutsumi-card-backup.zip") },
+                            onImport = { importLauncher.launch(arrayOf("application/zip", "application/octet-stream")) },
+                        )
+                        RecentBackupSection(state.latestCloudEvent)
+                    }
+                }
+            }
+        } else {
+            Column(
+                modifier = Modifier.fillMaxSize().verticalScroll(cloudScrollState).padding(16.dp)
+                    .testTag("backup-cloud-scroll"),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                // 横屏键盘出现时让连接表单独占工作区，避免左右分栏把可用高度
+                // 压到不足一个输入框；焦点字段会由 BringIntoViewRequester 定位。
+                if (!imeVisible) PageHeading(state)
+                CloudBackupSection(state, viewModel)
+                if (!imeVisible) {
                     LocalBackupSection(
                         enabled = !state.isBusy,
                         onExport = { exportLauncher.launch("mutsumi-card-backup.zip") },
@@ -142,20 +186,6 @@ fun BackupScreen(
                     )
                     RecentBackupSection(state.latestCloudEvent)
                 }
-            }
-        } else {
-            Column(
-                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                PageHeading(state)
-                CloudBackupSection(state, viewModel)
-                LocalBackupSection(
-                    enabled = !state.isBusy,
-                    onExport = { exportLauncher.launch("mutsumi-card-backup.zip") },
-                    onImport = { importLauncher.launch(arrayOf("application/zip", "application/octet-stream")) },
-                )
-                RecentBackupSection(state.latestCloudEvent)
             }
         }
     }
@@ -202,7 +232,25 @@ private fun CloudBackupSection(state: BackupUiState, viewModel: BackupViewModel)
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun CloudConnectionForm(state: BackupUiState, viewModel: BackupViewModel) {
+    val serverUrlBringIntoViewRequester = remember { BringIntoViewRequester() }
+    val remoteDirectoryBringIntoViewRequester = remember { BringIntoViewRequester() }
+    var serverUrlFocused by remember { mutableStateOf(false) }
+    var remoteDirectoryFocused by remember { mutableStateOf(false) }
+    val imeVisible = WindowInsets.isImeVisible
+    LaunchedEffect(serverUrlFocused, imeVisible) {
+        if (serverUrlFocused && imeVisible) {
+            withFrameNanos { }
+            serverUrlBringIntoViewRequester.bringIntoView()
+        }
+    }
+    LaunchedEffect(remoteDirectoryFocused, imeVisible) {
+        if (remoteDirectoryFocused && imeVisible) {
+            withFrameNanos { }
+            remoteDirectoryBringIntoViewRequester.bringIntoView()
+        }
+    }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(
             value = state.cloudServerUrl,
@@ -211,16 +259,76 @@ private fun CloudConnectionForm(state: BackupUiState, viewModel: BackupViewModel
             placeholder = { Text("https://example.com/dav") },
             singleLine = true,
             enabled = !state.isBusy,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth()
+                .heightIn(min = 56.dp)
+                .bringIntoViewRequester(serverUrlBringIntoViewRequester)
+                .onFocusEvent { focusState ->
+                    serverUrlFocused = focusState.isFocused
+                }
+                .testTag("backup-cloud-server-url"),
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        CloudCredentialFields(state, viewModel)
+        OutlinedTextField(
+            value = state.cloudRemoteDirectory,
+            onValueChange = viewModel::setCloudRemoteDirectory,
+            label = { Text("远端目录") },
+            singleLine = true,
+            enabled = !state.isBusy,
+            modifier = Modifier.fillMaxWidth()
+                .heightIn(min = 56.dp)
+                .bringIntoViewRequester(remoteDirectoryBringIntoViewRequester)
+                .onFocusEvent { focusState ->
+                    remoteDirectoryFocused = focusState.isFocused
+                }
+                .testTag("backup-cloud-remote-directory"),
+        )
+        Button(
+            onClick = viewModel::saveCloudConfig,
+            enabled = !state.isBusy,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Icon(Icons.Outlined.Cloud, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("保存并连接")
+        }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
+private fun CloudCredentialFields(state: BackupUiState, viewModel: BackupViewModel) {
+    val usernameBringIntoViewRequester = remember { BringIntoViewRequester() }
+    val passwordBringIntoViewRequester = remember { BringIntoViewRequester() }
+    var usernameFocused by remember { mutableStateOf(false) }
+    var passwordFocused by remember { mutableStateOf(false) }
+    val imeVisible = WindowInsets.isImeVisible
+    LaunchedEffect(usernameFocused, imeVisible) {
+        if (usernameFocused && imeVisible) {
+            withFrameNanos { }
+            usernameBringIntoViewRequester.bringIntoView()
+        }
+    }
+    LaunchedEffect(passwordFocused, imeVisible) {
+        if (passwordFocused && imeVisible) {
+            withFrameNanos { }
+            passwordBringIntoViewRequester.bringIntoView()
+        }
+    }
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val credentials: @Composable (Modifier) -> Unit = { fieldModifier ->
             OutlinedTextField(
                 value = state.cloudUsername,
                 onValueChange = viewModel::setCloudUsername,
                 label = { Text("用户名") },
                 singleLine = true,
                 enabled = !state.isBusy,
-                modifier = Modifier.weight(1f),
+                modifier = fieldModifier
+                    .heightIn(min = 56.dp)
+                    .bringIntoViewRequester(usernameBringIntoViewRequester)
+                    .onFocusEvent { focusState ->
+                        usernameFocused = focusState.isFocused
+                    }
+                    .testTag("backup-cloud-username"),
             )
             OutlinedTextField(
                 value = state.cloudPassword,
@@ -229,22 +337,24 @@ private fun CloudConnectionForm(state: BackupUiState, viewModel: BackupViewModel
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
                 enabled = !state.isBusy,
-                modifier = Modifier.weight(1f),
+                modifier = fieldModifier
+                    .heightIn(min = 56.dp)
+                    .bringIntoViewRequester(passwordBringIntoViewRequester)
+                    .onFocusEvent { focusState ->
+                        passwordFocused = focusState.isFocused
+                    }
+                    .testTag("backup-cloud-password"),
             )
         }
-        OutlinedTextField(
-            value = state.cloudRemoteDirectory,
-            onValueChange = viewModel::setCloudRemoteDirectory,
-            label = { Text("远端目录") },
-            singleLine = true,
-            enabled = !state.isBusy,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Button(
-            onClick = viewModel::saveCloudConfig,
-            enabled = !state.isBusy,
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("保存并连接") }
+        if (maxWidth < 520.dp) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                credentials(Modifier.fillMaxWidth())
+            }
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                credentials(Modifier.weight(1f))
+            }
+        }
     }
 }
 
@@ -467,6 +577,61 @@ private fun RestorePreviewDialog(
         },
         confirmButton = { Button(onClick = onConfirm, enabled = enabled) { Text("确认恢复") } },
         dismissButton = { TextButton(onClick = onDismiss, enabled = enabled) { Text("取消") } },
+    )
+}
+
+@Composable
+private fun CloudConflictResolutionDialog(
+    pending: PendingCloudConflict,
+    enabled: Boolean,
+    onDismiss: () -> Unit,
+    onKeepLocal: () -> Unit,
+    onUseCloud: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { if (enabled) onDismiss() },
+        title = { Text("发现同步冲突") },
+        text = {
+            Column(
+                modifier = Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    "本地和云端都修改了以下 ${pending.conflicts.size} 项。请选择同一侧，避免卡组、卡片和复习状态被拆成不一致的数据。",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                pending.conflicts.forEach { conflict ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Text(conflict.kind.label, fontWeight = FontWeight.Bold)
+                            Text("本地：${conflict.localSummary}", style = MaterialTheme.typography.bodySmall)
+                            Text("云端：${conflict.cloudSummary}", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onKeepLocal, enabled = enabled) {
+                Icon(Icons.Outlined.Archive, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text("保留本地")
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onUseCloud, enabled = enabled) {
+                Icon(Icons.Outlined.Cloud, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text("采用云端")
+            }
+        },
     )
 }
 

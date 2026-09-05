@@ -16,6 +16,11 @@ import com.mutsumi.card.data.local.MutsumiCardDatabase
 import com.mutsumi.card.data.preferences.AppPreferences
 import com.mutsumi.card.data.preferences.DataStoreAppPreferences
 import com.mutsumi.card.ai.AiSettingsStore
+import com.mutsumi.card.BuildConfig
+import com.mutsumi.card.settings.AppUpdateChecker
+import com.mutsumi.card.settings.AppUpdateSettingsStore
+import com.mutsumi.card.settings.DataStoreAppUpdateSettingsStore
+import com.mutsumi.card.settings.GitHubReleaseUpdateSource
 import kotlinx.coroutines.flow.first
 import java.io.File
 
@@ -27,6 +32,8 @@ class AppContainer(
     val cloudBackupOperations: CloudBackupOperations? = null,
     val cloudBackupSettings: CloudBackupSettings? = null,
     val aiSettingsStore: AiSettingsStore? = null,
+    val appUpdateSettingsStore: AppUpdateSettingsStore? = null,
+    val appUpdateChecker: AppUpdateChecker? = null,
 ) {
     suspend fun initializeDefaultSeed(context: Context) {
         DefaultSeedInitializer(context, cardRepository).initialize()
@@ -70,6 +77,11 @@ class AppContainer(
                 ),
                 cloudBackupSettings = PrivateCloudBackupSettings(context),
                 aiSettingsStore = AiSettingsStore.create(context),
+                appUpdateSettingsStore = DataStoreAppUpdateSettingsStore.create(context),
+                appUpdateChecker = AppUpdateChecker(
+                    source = GitHubReleaseUpdateSource(),
+                    installedVersionName = BuildConfig.VERSION_NAME,
+                ),
             )
         }
     }

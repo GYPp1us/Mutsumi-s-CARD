@@ -1,4 +1,4 @@
-name: Release APK
+name: 发布 APK
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Release tag, for example v0.2.0"
+        description: "发布标签，例如 v0.7.0"
         required: true
         type: string
 
@@ -21,6 +21,22 @@ jobs:
     steps:
       - name: 拉取代码
         uses: actions/checkout@v7.0.0
+        with:
+          # 手动触发也必须以输入标签对应的源码构建，不能用调用者当前分支替代。
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref }}
+          fetch-depth: 0
+
+      - name: 解析并验证发布标签
+        id: release_tag
+        shell: bash
+        env:
+          REQUESTED_TAG: ${{ inputs.tag_name }}
+        run: |
+          TAG="${REQUESTED_TAG:-$GITHUB_REF_NAME}"
+          APP_VERSION=$(sed -nE 's/^[[:space:]]*versionName = "([^"]+)".*/\1/p' app/build.gradle.kts | head -n 1)
+          test -n "$APP_VERSION"
+          test "$TAG" = "v$APP_VERSION"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: 设置 JDK
         uses: actions/setup-java@v5.4.0
@@ -50,7 +66,7 @@ jobs:
           MUTSUMI_RELEASE_STORE_PASSWORD: ${{ secrets.MUTSUMI_RELEASE_STORE_PASSWORD }}
           MUTSUMI_RELEASE_KEY_ALIAS: ${{ secrets.MUTSUMI_RELEASE_KEY_ALIAS }}
           MUTSUMI_RELEASE_KEY_PASSWORD: ${{ secrets.MUTSUMI_RELEASE_KEY_PASSWORD }}
-        run: bash gradlew --no-daemon :app:assembleRelease
+        run: bash gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebugAndroidTest :app:assembleRelease
 
       - name: 验证 APK 签名和历史证书
         run: |
@@ -66,16 +82,6 @@ jobs:
           cp app/build/outputs/apk/release/app-release.apk release/mutsumi-card-release.apk
           sha256sum release/mutsumi-card-release.apk > release/mutsumi-card-release.apk.sha256
 
-      - name: 解析发布标签
-        id: release_tag
-        shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "tag=${{ inputs.tag_name }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: 发布 GitHub Release
         uses: softprops/action-gh-release@v3.0.1
         with:
@@ -84,4 +90,9 @@ jobs:
           files: |
             release/mutsumi-card-release.apk
             release/mutsumi-card-release.apk.sha256
-          generate_release_notes: true
+          body: |
+            ## Mutsumi's CARD ${{ steps.release_tag.outputs.tag }}
+
+            - 已通过单元测试、Lint、AndroidTest APK 编译与 Release 构建。
+            - `mutsumi-card-release.apk` 的 signer SHA-256 已精确匹配历史发布证书。
+            - 下载 APK 后请按 Android 系统提示确认安装；Obtainium 可追踪此 Release。

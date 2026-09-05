@@ -14,6 +14,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -31,8 +32,12 @@ import com.mutsumi.card.cards.StoredCardValueImage
 import com.mutsumi.card.data.AppContainer
 import com.mutsumi.card.domain.review.ReviewFeedback
 import com.mutsumi.card.domain.workflow.MemoryCard
+import com.mutsumi.card.draw.DrawSaveResult
 import com.mutsumi.card.draw.DrawScreen
 import com.mutsumi.card.study.StudyScreen
+import com.mutsumi.card.settings.AndroidUpdateDownloader
+import com.mutsumi.card.settings.AppUpdateEvent
+import com.mutsumi.card.settings.AppUpdateViewModel
 import com.mutsumi.card.ui.adaptive.AdaptiveLayoutPolicy
 import com.mutsumi.card.ui.adaptive.AdaptiveScaffold
 import com.mutsumi.card.ui.components.FeedbackController
@@ -40,6 +45,7 @@ import com.mutsumi.card.ui.components.FeedbackHost
 import com.mutsumi.card.ui.navigation.AppDestination
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import java.io.IOException
 import java.io.File
 
 @Composable
@@ -69,6 +75,32 @@ fun MutsumiCardApp(appContainer: AppContainer) {
             settingsStore = requireNotNull(appContainer.aiSettingsStore),
         )
     }
+    val appUpdateViewModel: AppUpdateViewModel = viewModel {
+        AppUpdateViewModel(
+            settingsStore = requireNotNull(appContainer.appUpdateSettingsStore),
+            checker = requireNotNull(appContainer.appUpdateChecker),
+        )
+    }
+    val updateDownloader = remember(context) { AndroidUpdateDownloader(context.applicationContext) }
+
+    LaunchedEffect(appUpdateViewModel, updateDownloader) {
+        appUpdateViewModel.events.collect { event ->
+            when (event) {
+                is AppUpdateEvent.DownloadRequested -> {
+                    val message = try {
+                        updateDownloader.enqueue(event.update)
+                    } catch (error: SecurityException) {
+                        "更新下载启动失败：${error.message ?: "系统拒绝了下载请求"}"
+                    } catch (error: IllegalArgumentException) {
+                        "更新下载启动失败：${error.message ?: "更新地址无效"}"
+                    } catch (error: IllegalStateException) {
+                        "更新下载启动失败：${error.message ?: "系统下载服务不可用"}"
+                    }
+                    feedback.show(message)
+                }
+            }
+        }
+    }
 
     LaunchedEffect(appContainer) {
         try {
@@ -96,7 +128,7 @@ fun MutsumiCardApp(appContainer: AppContainer) {
         }
     }
 
-    BoxWithConstraints {
+    BoxWithConstraints(Modifier.testTag(if (selectedDeckId > 0) "app-initialized" else "app-initializing")) {
         val mode = AdaptiveLayoutPolicy.mode(maxWidth.value.toInt(), maxHeight.value.toInt())
         val callbacks = cardsViewModel.callbacks()
         val contextContent: (@Composable () -> Unit)? = if (selected == AppDestination.Cards) {
@@ -135,32 +167,34 @@ fun MutsumiCardApp(appContainer: AppContainer) {
                 AppDestination.Draw -> DrawScreen { key, image ->
                     val deckId = selectedDeckId.takeIf { it > 0 } ?: cardsState.currentDeck?.id
                     if (deckId == null) {
-                        scope.launch { feedback.show("卡片保存失败：当前没有可用卡组") }
-                        "当前没有可用卡组"
-                    } else {
-                        selectedDeckId = deckId
-                        scope.launch {
-                            try {
-                                appContainer.cardRepository.saveCard(
-                                    deckId = deckId,
-                                    keyText = key,
-                                    frontPng = image.frontPngBytes,
-                                    backPng = image.backPngBytes,
-                                )
-                                feedback.show("卡片已保存：$key")
-                                selectedName = AppDestination.Study.name
-                            } catch (cancelled: CancellationException) {
-                                throw cancelled
-                            } catch (error: Exception) {
-                                feedback.show("卡片保存失败：${error.message ?: "未知错误"}")
-                            }
-                        }
-                        "正在保存卡片"
+                        val message = "当前没有可用卡组"
+                        scope.launch { feedback.show("卡片保存失败：$message") }
+                        return@DrawScreen DrawSaveResult.Rejected(message)
                     }
+                    selectedDeckId = deckId
+                    try {
+                        appContainer.cardRepository.saveCard(
+                            deckId = deckId,
+                            keyText = key,
+                            frontPng = image.frontPngBytes,
+                            backPng = image.backPngBytes,
+                        )
+                    } catch (error: IOException) {
+                        val message = error.message ?: "无法写入卡片图片"
+                        scope.launch { feedback.show("卡片保存失败：$message") }
+                        return@DrawScreen DrawSaveResult.Rejected(message)
+                    }
+                    scope.launch { feedback.show("卡片已保存：$key") }
+                    selectedName = AppDestination.Study.name
+                    DrawSaveResult.Saved("卡片已保存")
                 }
                 AppDestination.Backup -> BackupScreen(backupViewModel, feedback)
                 AppDestination.AiBatch -> AiBatchScreen(aiViewModel, feedback)
-                AppDestination.Settings -> AiSettingsScreen(requireNotNull(appContainer.aiSettingsStore), feedback)
+                AppDestination.Settings -> AiSettingsScreen(
+                    store = requireNotNull(appContainer.aiSettingsStore),
+                    appUpdateViewModel = appUpdateViewModel,
+                    feedback = feedback,
+                )
             }
         }
     }

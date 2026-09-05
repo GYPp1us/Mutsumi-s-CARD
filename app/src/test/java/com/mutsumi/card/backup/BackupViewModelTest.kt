@@ -95,6 +95,44 @@ class BackupViewModelTest {
         assertThat(viewModel.state.value.message).contains("清理已排队")
     }
 
+    @Test
+    fun `云端冲突会展示决策并将所选策略传回同步操作`() = runTest {
+        val cloud = ConflictCloudOperations()
+        val settings = object : CloudBackupSettings {
+            override fun load(): CloudBackupConfig? = null
+            override fun save(config: CloudBackupConfig) = Unit
+        }
+        val viewModel = BackupViewModel(
+            operations = object : BackupOperations {
+                override suspend fun export(output: OutputStream) = ExportSummary(0)
+                override suspend fun import(input: InputStream) = ImportSummary(0, 0)
+            },
+            operationScope = this,
+            cloudOperations = cloud,
+            cloudSettings = settings,
+        )
+        viewModel.setCloudServerUrl("https://example.test/dav")
+        viewModel.setCloudUsername("user")
+        viewModel.setCloudPassword("password")
+        viewModel.saveCloudConfig()
+        advanceUntilIdle()
+
+        viewModel.backupToCloud()
+        advanceUntilIdle()
+
+        val pending = requireNotNull(viewModel.state.value.pendingCloudConflict)
+        assertThat(pending.conflicts.single().kind).isEqualTo(CloudConflictKind.Card)
+        assertThat(viewModel.state.value.message).contains("请选择")
+
+        viewModel.resolveCloudConflict(CloudConflictResolution.KeepLocal)
+        advanceUntilIdle()
+
+        assertThat(cloud.receivedResolution).isEqualTo(CloudConflictResolution.KeepLocal)
+        assertThat(cloud.receivedExpectedConflicts).isEqualTo(pending.conflicts)
+        assertThat(viewModel.state.value.pendingCloudConflict).isNull()
+        assertThat(viewModel.state.value.message).contains("云端增量备份完成")
+    }
+
     private fun viewModel(scope: TestScope, operations: BackupOperations = SuspendingOperations()) =
         BackupViewModel(operations, scope)
 
@@ -109,5 +147,63 @@ class BackupViewModelTest {
             importCalls++
             return ImportSummary(1, 1)
         }
+    }
+
+    private class ConflictCloudOperations : CloudBackupOperations {
+        var receivedResolution: CloudConflictResolution? = null
+        var receivedExpectedConflicts: List<CloudConflict>? = null
+
+        override suspend fun inspect(config: CloudBackupConfig): CloudBackupOverview = overview()
+
+        override suspend fun backup(
+            config: CloudBackupConfig,
+            pushDelete: Boolean,
+            conflictResolution: CloudConflictResolution?,
+            expectedConflicts: List<CloudConflict>?,
+        ): CloudBackupResult {
+            if (conflictResolution == null) {
+                throw CloudConflictException(
+                    listOf(
+                        CloudConflict(
+                            key = "card-card-1",
+                            kind = CloudConflictKind.Card,
+                            localSummary = "本地卡片",
+                            cloudSummary = "云端卡片",
+                        ),
+                    ),
+                )
+            }
+            receivedResolution = conflictResolution
+            receivedExpectedConflicts = expectedConflicts
+            return CloudBackupResult(overview(), createdSnapshot = true)
+        }
+
+        override suspend fun previewRestore(
+            config: CloudBackupConfig,
+            snapshotId: String,
+            pullDelete: Boolean,
+            conflictResolution: CloudConflictResolution?,
+            expectedConflicts: List<CloudConflict>?,
+        ): CloudRestorePreview = error("unused")
+
+        override suspend fun restore(
+            config: CloudBackupConfig,
+            snapshotId: String,
+            pullDelete: Boolean,
+            conflictResolution: CloudConflictResolution?,
+            expectedConflicts: List<CloudConflict>?,
+        ): ImportSummary = error("unused")
+
+        private fun overview(): CloudBackupOverview = CloudBackupOverview(
+            snapshots = emptyList(),
+            current = CloudChangeStats(
+                cardCount = 1,
+                deckCount = 1,
+                addedOrChangedCount = 1,
+                deletedCount = 0,
+                addedOrChangedDeckCount = 0,
+                deletedDeckCount = 0,
+            ),
+        )
     }
 }

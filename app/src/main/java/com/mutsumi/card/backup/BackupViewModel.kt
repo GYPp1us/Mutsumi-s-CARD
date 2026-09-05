@@ -37,6 +37,10 @@ data class BackupUiState(
     val pushDelete: Boolean = false,
     val pullDelete: Boolean = false,
     val pendingRestorePreview: CloudRestorePreview? = null,
+    val pendingRestorePullDelete: Boolean? = null,
+    val pendingRestoreConflictResolution: CloudConflictResolution? = null,
+    val pendingRestoreExpectedConflicts: List<CloudConflict>? = null,
+    val pendingCloudConflict: PendingCloudConflict? = null,
     val cloudEventSucceeded: Boolean? = null,
 )
 
@@ -118,6 +122,17 @@ class BackupViewModel(
     }
 
     fun backupToCloud() {
+        backupToCloud(
+            pushDelete = mutableState.value.pushDelete,
+            conflictResolution = null,
+        )
+    }
+
+    private fun backupToCloud(
+        pushDelete: Boolean,
+        conflictResolution: CloudConflictResolution?,
+        expectedConflicts: List<CloudConflict>? = null,
+    ) {
         val cloud = cloudOperations ?: run {
             reportError("云端备份失败：当前未装配云端备份")
             return
@@ -130,8 +145,8 @@ class BackupViewModel(
             )
             return
         }
-        launchOperation("云端备份") {
-            val result = cloud.backup(config, mutableState.value.pushDelete)
+        launchOperation("云端备份", CloudConflictAction.Backup(pushDelete)) {
+            val result = cloud.backup(config, pushDelete, conflictResolution, expectedConflicts)
             applyOverview(result.overview)
             val stats = result.overview.current
             val success = "云端增量备份完成：卡组 ${stats.deckCount}（+${stats.addedOrChangedDeckCount}/-${stats.deletedDeckCount}），卡片 ${stats.cardCount}（+${stats.addedOrChangedCount}/-${stats.deletedCount}）"
@@ -141,6 +156,19 @@ class BackupViewModel(
     }
 
     fun restoreCloudSnapshot(snapshotId: String) {
+        restoreCloudSnapshot(
+            snapshotId = snapshotId,
+            pullDelete = mutableState.value.pullDelete,
+            conflictResolution = null,
+        )
+    }
+
+    private fun restoreCloudSnapshot(
+        snapshotId: String,
+        pullDelete: Boolean,
+        conflictResolution: CloudConflictResolution?,
+        expectedConflicts: List<CloudConflict>? = null,
+    ) {
         val cloud = cloudOperations ?: run {
             reportError("云端恢复失败：当前未装配云端备份")
             return
@@ -149,8 +177,8 @@ class BackupViewModel(
             reportError("云端恢复失败：请先配置 WebDAV 连接")
             return
         }
-        launchOperation("云端恢复") {
-            val result = cloud.restore(config, snapshotId, mutableState.value.pullDelete)
+        launchOperation("云端恢复", CloudConflictAction.Restore(snapshotId, pullDelete)) {
+            val result = cloud.restore(config, snapshotId, pullDelete, conflictResolution, expectedConflicts)
             applyOverview(cloud.inspect(config))
             val success = "已从云端导入 ${result.deckCount} 个卡组、${result.cardCount} 张卡片"
             mutableState.value = mutableState.value.copy(latestCloudEvent = success, cloudEventSucceeded = true)
@@ -159,6 +187,19 @@ class BackupViewModel(
     }
 
     fun openRestorePreview(snapshotId: String) {
+        openRestorePreview(
+            snapshotId = snapshotId,
+            pullDelete = mutableState.value.pullDelete,
+            conflictResolution = null,
+        )
+    }
+
+    private fun openRestorePreview(
+        snapshotId: String,
+        pullDelete: Boolean,
+        conflictResolution: CloudConflictResolution?,
+        expectedConflicts: List<CloudConflict>? = null,
+    ) {
         val cloud = cloudOperations ?: run {
             reportError("读取恢复预览失败：当前未配置云端备份")
             return
@@ -167,10 +208,13 @@ class BackupViewModel(
             reportError("读取恢复预览失败：请先配置 WebDAV 连接")
             return
         }
-        launchOperation("读取恢复预览") {
-            val preview = cloud.previewRestore(config, snapshotId, mutableState.value.pullDelete)
+        launchOperation("读取恢复预览", CloudConflictAction.PreviewRestore(snapshotId, pullDelete)) {
+            val preview = cloud.previewRestore(config, snapshotId, pullDelete, conflictResolution, expectedConflicts)
             mutableState.value = mutableState.value.copy(
                 pendingRestorePreview = preview,
+                pendingRestorePullDelete = pullDelete,
+                pendingRestoreConflictResolution = conflictResolution,
+                pendingRestoreExpectedConflicts = expectedConflicts,
                 cloudEventSucceeded = true,
             )
             "请确认恢复 ${preview.stats.deckCount} 个卡组、${preview.stats.cardCount} 张卡片"
@@ -178,7 +222,14 @@ class BackupViewModel(
     }
 
     fun dismissRestorePreview() {
-        if (!mutableState.value.isBusy) mutableState.value = mutableState.value.copy(pendingRestorePreview = null)
+        if (!mutableState.value.isBusy) {
+            mutableState.value = mutableState.value.copy(
+                pendingRestorePreview = null,
+                pendingRestorePullDelete = null,
+                pendingRestoreConflictResolution = null,
+                pendingRestoreExpectedConflicts = null,
+            )
+        }
     }
 
     fun confirmRestorePreview() {
@@ -191,16 +242,52 @@ class BackupViewModel(
             reportError("云端恢复失败：请先配置 WebDAV 连接")
             return
         }
-        launchOperation("云端恢复") {
-            val result = cloud.restore(config, preview.snapshotId, mutableState.value.pullDelete)
+        val pullDelete = requireNotNull(mutableState.value.pendingRestorePullDelete)
+        val conflictResolution = mutableState.value.pendingRestoreConflictResolution
+        val expectedConflicts = mutableState.value.pendingRestoreExpectedConflicts
+        launchOperation("云端恢复", CloudConflictAction.Restore(preview.snapshotId, pullDelete)) {
+            val result = cloud.restore(config, preview.snapshotId, pullDelete, conflictResolution, expectedConflicts)
             applyOverview(cloud.inspect(config))
             val success = "云端恢复完成：${result.deckCount} 个卡组、${result.cardCount} 张卡片"
             mutableState.value = mutableState.value.copy(
                 pendingRestorePreview = null,
+                pendingRestorePullDelete = null,
+                pendingRestoreConflictResolution = null,
+                pendingRestoreExpectedConflicts = null,
                 latestCloudEvent = success,
                 cloudEventSucceeded = true,
             )
             buildSuccessMessage(success, result.warnings)
+        }
+    }
+
+    fun dismissCloudConflict() {
+        if (!mutableState.value.isBusy) {
+            mutableState.value = mutableState.value.copy(
+                pendingCloudConflict = null,
+                message = "已取消云端冲突处理，数据未变更。",
+            )
+        }
+    }
+
+    fun resolveCloudConflict(resolution: CloudConflictResolution) {
+        if (mutableState.value.isBusy) return
+        val pending = mutableState.value.pendingCloudConflict ?: return
+        mutableState.value = mutableState.value.copy(pendingCloudConflict = null)
+        when (val action = pending.action) {
+            is CloudConflictAction.Backup -> backupToCloud(action.pushDelete, resolution, pending.conflicts)
+            is CloudConflictAction.PreviewRestore -> openRestorePreview(
+                snapshotId = action.snapshotId,
+                pullDelete = action.pullDelete,
+                conflictResolution = resolution,
+                expectedConflicts = pending.conflicts,
+            )
+            is CloudConflictAction.Restore -> restoreCloudSnapshot(
+                snapshotId = action.snapshotId,
+                pullDelete = action.pullDelete,
+                conflictResolution = resolution,
+                expectedConflicts = pending.conflicts,
+            )
         }
     }
 
@@ -236,7 +323,11 @@ class BackupViewModel(
         reportError("导入失败：${error.message ?: "无法打开来源文件"}")
     }
 
-    private fun launchOperation(label: String, block: suspend () -> String) {
+    private fun launchOperation(
+        label: String,
+        conflictAction: CloudConflictAction? = null,
+        block: suspend () -> String,
+    ) {
         if (mutableState.value.isBusy) return
         mutableState.value = mutableState.value.copy(isBusy = true, message = "正在$label…", errorMessage = null)
         (operationScope ?: viewModelScope).launch {
@@ -245,17 +336,54 @@ class BackupViewModel(
                 mutableState.value = mutableState.value.copy(isBusy = false, message = resultMessage, errorMessage = null)
             } catch (error: CancellationException) {
                 throw error
-            } catch (error: Exception) {
-                val message = "${label}失败：${error.message ?: fallbackFor(label)}"
+            } catch (error: CloudConflictException) {
+                if (conflictAction == null) throw error
+                val message = "检测到 ${error.entries.size} 项同步冲突，请选择保留本地或采用云端版本。"
                 mutableState.value = mutableState.value.copy(
                     isBusy = false,
                     message = message,
-                    errorMessage = message,
-                    latestCloudEvent = message.takeIf { label.startsWith("云端") } ?: mutableState.value.latestCloudEvent,
-                    cloudEventSucceeded = false.takeIf { label.startsWith("云端") } ?: mutableState.value.cloudEventSucceeded,
+                    errorMessage = null,
+                    latestCloudEvent = message,
+                    cloudEventSucceeded = false,
+                    pendingRestorePreview = if (conflictAction is CloudConflictAction.Restore) {
+                        null
+                    } else {
+                        mutableState.value.pendingRestorePreview
+                    },
+                    pendingRestorePullDelete = if (conflictAction is CloudConflictAction.Restore) {
+                        null
+                    } else {
+                        mutableState.value.pendingRestorePullDelete
+                    },
+                    pendingRestoreConflictResolution = if (conflictAction is CloudConflictAction.Restore) {
+                        null
+                    } else {
+                        mutableState.value.pendingRestoreConflictResolution
+                    },
+                    pendingRestoreExpectedConflicts = if (conflictAction is CloudConflictAction.Restore) {
+                        null
+                    } else {
+                        mutableState.value.pendingRestoreExpectedConflicts
+                    },
+                    pendingCloudConflict = PendingCloudConflict(error.entries, conflictAction),
                 )
+            } catch (error: IOException) {
+                showOperationFailure(label, error)
+            } catch (error: BackupFormatException) {
+                showOperationFailure(label, error)
             }
         }
+    }
+
+    private fun showOperationFailure(label: String, error: Exception) {
+        val message = "${label}失败：${error.message ?: fallbackFor(label)}"
+        mutableState.value = mutableState.value.copy(
+            isBusy = false,
+            message = message,
+            errorMessage = message,
+            latestCloudEvent = message.takeIf { label.startsWith("云端") } ?: mutableState.value.latestCloudEvent,
+            cloudEventSucceeded = false.takeIf { label.startsWith("云端") } ?: mutableState.value.cloudEventSucceeded,
+        )
     }
 
     private fun fallbackFor(label: String): String = when {

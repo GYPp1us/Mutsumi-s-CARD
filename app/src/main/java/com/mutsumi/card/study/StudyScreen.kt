@@ -316,7 +316,7 @@ private fun FloatingStudyCard(
         center = center,
         angle = angle,
         onSizeChange = onSizeChange,
-        modifier = modifier.then(pointerModifier),
+        modifier = modifier.then(pointerModifier).testTag("study-card"),
     )
 }
 

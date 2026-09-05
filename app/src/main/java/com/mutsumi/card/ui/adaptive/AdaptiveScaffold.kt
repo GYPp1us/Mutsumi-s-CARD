@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,9 +14,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.IconButton
@@ -29,6 +31,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -49,6 +53,19 @@ fun AdaptiveScaffold(
     snackbarHost: @Composable () -> Unit = {},
     content: @Composable () -> Unit,
 ) {
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val selectDestination: (AppDestination) -> Unit = { destination ->
+        // 切页时不保留旧页面的文本焦点，避免 IME 覆盖新页面的输入表单。
+        focusManager.clearFocus(force = true)
+        keyboardController?.hide()
+        onSelect(destination)
+    }
+    val openSettings: () -> Unit = {
+        focusManager.clearFocus(force = true)
+        keyboardController?.hide()
+        onOpenSettings()
+    }
     BoxWithConstraints(Modifier.fillMaxSize().testTag("app-shell")) {
         val outerWidthDp = maxWidth.value.roundToInt()
         val outerHeightDp = maxHeight.value.roundToInt()
@@ -56,22 +73,28 @@ fun AdaptiveScaffold(
         Box(Modifier.fillMaxSize()) {
             Scaffold(
                 modifier = Modifier.fillMaxSize(),
-                contentWindowInsets = WindowInsets.safeDrawing,
+                // 结构布局只避开系统栏；IME 由拥有焦点输入框的页面单独处理。
+                // safeDrawing 会在横屏键盘占满窗口时把工作区压到 0dp。
+                contentWindowInsets = WindowInsets.systemBars,
                 snackbarHost = {},
                 bottomBar = {
                     if (outerMode != AppLayoutMode.LandscapeThreePane) {
-                        BottomNavigationBar(selected, onSelect)
+                        BottomNavigationBar(selected, selectDestination)
                     }
                 },
             ) { safePadding ->
-                BoxWithConstraints(Modifier.fillMaxSize().padding(safePadding)) {
+                BoxWithConstraints(
+                    Modifier
+                        .fillMaxSize()
+                        .padding(safePadding),
+                ) {
                     val widthDp = maxWidth.value.roundToInt()
                     val heightDp = maxHeight.value.roundToInt()
                     when (AdaptiveLayoutPolicy.mode(widthDp, heightDp)) {
                         AppLayoutMode.LandscapeThreePane -> ThreePaneShell(
                             selected = selected,
-                            onSelect = onSelect,
-                            onOpenSettings = onOpenSettings,
+                            onSelect = selectDestination,
+                            onOpenSettings = openSettings,
                             contextContent = contextContent,
                             content = content,
                         )
@@ -95,6 +118,7 @@ fun AdaptiveScaffold(
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun ThreePaneShell(
     selected: AppDestination,
     onSelect: (AppDestination) -> Unit,
@@ -102,6 +126,7 @@ private fun ThreePaneShell(
     contextContent: (@Composable () -> Unit)?,
     content: @Composable () -> Unit,
 ) {
+    val imeVisible = WindowInsets.isImeVisible
     Row(Modifier.fillMaxSize()) {
         NavigationRail(selected, onSelect, onOpenSettings)
         Box(Modifier.weight(1f).fillMaxSize().testTag("main-workspace")) { content() }
@@ -114,12 +139,14 @@ private fun ThreePaneShell(
                     .background(Surface)
                     .testTag("context-pane"),
             ) {
-                Text(
-                    text = "上下文 · ${selected.label}",
-                    modifier = Modifier.height(56.dp).padding(horizontal = 16.dp, vertical = 18.dp),
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Box(Modifier.weight(1f).padding(16.dp)) { contextContent() }
+                if (!imeVisible) {
+                    Text(
+                        text = "上下文 · ${selected.label}",
+                        modifier = Modifier.height(56.dp).padding(horizontal = 16.dp, vertical = 18.dp),
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                Box(Modifier.weight(1f).padding(if (imeVisible) 4.dp else 16.dp)) { contextContent() }
             }
         }
     }
@@ -131,14 +158,67 @@ private fun NavigationRail(
     onSelect: (AppDestination) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
-    Column(
+    BoxWithConstraints(
         Modifier
             .width(72.dp)
             .fillMaxSize()
             .background(Surface)
             .border(width = 1.dp, color = Divider)
-            .padding(vertical = 10.dp)
             .testTag("navigation-rail"),
+    ) {
+        if (maxHeight < 520.dp) {
+            CompactNavigationRail(selected, onSelect)
+        } else {
+            StandardNavigationRail(selected, onSelect, onOpenSettings)
+        }
+    }
+}
+
+@Composable
+private fun CompactNavigationRail(
+    selected: AppDestination,
+    onSelect: (AppDestination) -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(vertical = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(0.dp),
+    ) {
+        Box(
+            Modifier.size(28.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(7.dp))
+                .background(PrimaryGreen),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("M", color = Surface, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        }
+        AppDestination.entries.forEach { destination ->
+            val selectedDestination = destination == selected
+            IconButton(
+                onClick = { onSelect(destination) },
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                    .background(if (selectedDestination) PrimaryGreenSoft else Surface)
+                    .testTag("nav-${destination.name.lowercase()}"),
+            ) {
+                Icon(
+                    destination.icon,
+                    contentDescription = destination.label,
+                    tint = if (selectedDestination) PrimaryGreen else androidx.compose.ui.graphics.Color.Unspecified,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StandardNavigationRail(
+    selected: AppDestination,
+    onSelect: (AppDestination) -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxSize().padding(vertical = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(
@@ -149,7 +229,7 @@ private fun NavigationRail(
             Text("M", color = Surface, fontWeight = FontWeight.Bold)
         }
         Spacer(Modifier.height(14.dp))
-        AppDestination.entries.forEach { destination ->
+        AppDestination.entries.filter { it != AppDestination.Settings }.forEach { destination ->
             NavigationRailItem(
                 modifier = Modifier.testTag("nav-${destination.name.lowercase()}"),
                 selected = destination == selected,
@@ -159,7 +239,7 @@ private fun NavigationRail(
             )
         }
         Spacer(Modifier.weight(1f))
-        IconButton(onClick = onOpenSettings) {
+        IconButton(onClick = onOpenSettings, modifier = Modifier.testTag("nav-settings")) {
             Icon(Icons.Outlined.Settings, contentDescription = "设置")
         }
     }

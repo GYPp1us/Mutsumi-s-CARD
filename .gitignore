@@ -4,5 +4,6 @@
 .superpowers/
 .worktrees/
 build/
+artifacts/
 local.properties
 *.iml

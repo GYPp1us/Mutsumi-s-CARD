@@ -200,6 +200,8 @@ class CardsViewModel(
             mutableUiState.value = mutableUiState.value.copy(isBusy = true)
             try {
                 preferences.setCurrentDeckId(deckId)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (error: Exception) {
                 Log.e(LOG_TAG, "修复当前卡组偏好失败", error)
                 throw error

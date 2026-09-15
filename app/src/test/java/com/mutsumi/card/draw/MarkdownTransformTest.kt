@@ -14,7 +14,7 @@ class MarkdownTransformTest {
 
     @Test fun panDoesNotChangeLayoutWidthAndIsUnbounded() {
         val moved = MarkdownTransform().transform(0f, 0f, 100000f, -100000f, 1f)
-        assertThat(moved.layoutWidth).isEqualTo(512)
+        assertThat(moved.layoutWidth).isEqualTo(256)
         assertThat(moved.offsetX).isEqualTo(100000f)
         assertThat(moved.offsetY).isEqualTo(-100000f)
     }
@@ -22,7 +22,7 @@ class MarkdownTransformTest {
     @Test fun fractionalPinchesAccumulateAndWidthHonorsSdkLimits() {
         var state = MarkdownTransform()
         repeat(100) { state = state.transform(0f, 0f, 0f, 0f, 1.001f) }
-        assertThat(state.layoutWidth).isLessThan(470)
+        assertThat(state.layoutWidth).isLessThan(235)
         assertThat(state.transform(0f, 0f, 0f, 0f, 100000f).layoutWidth).isEqualTo(64)
         assertThat(state.transform(0f, 0f, 0f, 0f, 0.00001f).layoutWidth).isEqualTo(4096)
     }

@@ -4,7 +4,7 @@ import kotlin.math.roundToInt
 
 /** 独立的卡面坐标。缩放通过 SDK 排版宽度重新换行，移动不改变排版。 */
 data class MarkdownTransform(
-    val width: Float = 512f,
+    val width: Float = 256f,
     val offsetX: Float = 0f,
     val offsetY: Float = 0f,
 ) {

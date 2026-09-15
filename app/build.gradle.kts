@@ -18,6 +18,7 @@ val releaseSigningReady = listOf(
 ).all { !it.isNullOrBlank() }
 
 android {
+    ndkVersion = "29.0.14206865"
     namespace = "com.mutsumi.card"
     compileSdk = 36
 
@@ -114,9 +115,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("io.noties.markwon:core:4.6.2")
-    implementation("io.noties.markwon:inline-parser:4.6.2")
-    implementation("ru.noties:jlatexmath-android:0.2.0")
 
     ksp("androidx.room:room-compiler:2.8.4")
 
@@ -135,4 +133,35 @@ dependencies {
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+val rustRoot = rootProject.file("native/md2svg-jni")
+val rustAbis = providers.gradleProperty("md2svgAbis").orElse("arm64-v8a,armeabi-v7a,x86_64")
+val buildRustHost by tasks.registering(Exec::class) {
+    workingDir(rootProject.projectDir)
+    commandLine("cargo", "build", "--locked", "--manifest-path", "native/md2svg-jni/Cargo.toml")
+    inputs.files(fileTree(rustRoot) { exclude("target/**") })
+    outputs.dir(rustRoot.resolve("target/debug"))
+}
+val buildRustAndroid by tasks.registering(Exec::class) {
+    workingDir(rustRoot)
+    val targets = rustAbis.get().split(",")
+    commandLine(listOf("cargo", "ndk") + targets.flatMap { listOf("-t", it) } + listOf(
+        "--platform", "26", "-o", layout.buildDirectory.dir("generated/rustJniLibs").get().asFile.absolutePath,
+        "build", "--release", "--locked",
+    ))
+    environment("ANDROID_NDK_HOME", providers.environmentVariable("ANDROID_NDK_HOME").orElse(
+        android.sdkDirectory.resolve("ndk/${android.ndkVersion}").absolutePath,
+    ).get())
+    inputs.files(fileTree(rustRoot) { exclude("target/**") })
+    inputs.property("abis", rustAbis)
+    outputs.dir(layout.buildDirectory.dir("generated/rustJniLibs"))
+}
+android.sourceSets["main"].jniLibs.srcDir(layout.buildDirectory.dir("generated/rustJniLibs").get().asFile)
+tasks.withType<Test>().configureEach {
+    dependsOn(buildRustHost)
+    systemProperty("java.library.path", rustRoot.resolve("target/debug").absolutePath)
+}
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }.configureEach {
+    dependsOn(buildRustAndroid)
 }

@@ -27,13 +27,38 @@ jobs:
         uses: android-actions/setup-android@v4.0.1
 
       - name: 安装 Android 包
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865"
+
+      - name: 准备 Rust 与 Android 目标
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          rustup default 1.95.0
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+          cargo install cargo-ndk --version 4.1.2 --locked
+
+      - name: 缓存 Rust 构建
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/md2svg-jni/target
+          key: ${{ runner.os }}-md2svg-${{ hashFiles('native/md2svg-jni/Cargo.lock') }}
+
+      - name: 验证 Rust SDK 集成
+        env:
+          CARGO_BUILD_JOBS: 2
+        run: cargo test --locked --manifest-path native/md2svg-jni/Cargo.toml
 
       - name: 运行单元测试、静态检查并构建 Debug APK
+        env:
+          CARGO_BUILD_JOBS: 2
         run: bash gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebugAndroidTest :app:assembleDebug
 
       - name: 上传 Debug APK
         uses: actions/upload-artifact@v7.0.1
         with:
           name: mutsumi-card-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk

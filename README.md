@@ -2,7 +2,7 @@
 
 Mutsumi's CARD 是一个原生 Android 记忆卡片工具。卡片保留 `key` 文字机制，学习内容以图片为主；录入时可以使用触控笔绘制，也可以使用双面 Markdown 生成图片卡片。
 
-当前版本：`v0.7.0`；正式发布记录见 GitHub Releases。
+当前版本：`v0.8.0`；正式发布记录见 GitHub Releases。
 
 ## 产品能力
 
@@ -11,6 +11,7 @@ Mutsumi's CARD 是一个原生 Android 记忆卡片工具。卡片保留 `key` �
 - 横屏使用左侧导航和宽屏工作区，竖屏使用底部导航。
 - 卡片页按条目展示卡片，并提供卡片选择和卡组上下文。
 - 录入页支持触控笔、手指绘制、预设与自定义 RGB 画笔颜色、笔刷大小、撤销、清空、底图以及无限画布视口。
+- Markdown 图层使用 md2svg Rust SDK，单指移动、双指调整字号并重新排版；绘制、Markdown、底图分别使用单实线、虚线、双线标识。
 - 绘图保存结果为银行卡比例 PNG，底图等比适配，不拉伸、不裁切。
 - 双面录入支持正面和背面并行编辑；用卡面中的灰色背景标识保存状态，空正面会明确提示将降级为文字 key；key 可一键锁定。
 - 本地备份支持 ZIP 导入导出；云端支持 WebDAV 滑动窗口增量同步、版本预览、恢复和三方冲突解决（保留本地或采用云端）。
@@ -28,7 +29,16 @@ Mutsumi's CARD 是一个原生 Android 记忆卡片工具。卡片保留 `key` �
 
 ## 本地构建
 
-要求：JDK 21、Android SDK 36、Build Tools 36.0.0。Windows 上通常可通过 `ANDROID_HOME` 指向 `%LOCALAPPDATA%\Android\Sdk`。
+要求：JDK 21、Android SDK 36、Build Tools 36.0.0、NDK 29.0.14206865、Rust 1.95.0 与 cargo-ndk 4.1.2。Windows 上通常可通过 `ANDROID_HOME` 指向 `%LOCALAPPDATA%\Android\Sdk`。
+
+首次构建前准备 Rust Android 目标：
+
+```powershell
+rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+cargo install cargo-ndk --version 4.1.2 --locked
+```
+
+Gradle 自动编译 JNI 和宿主单测库，SDK 提交及依赖由 Cargo.lock 固定。仅在本地调试模拟器时可传 `-Pmd2svgAbis=x86_64`；正式发布包含 arm64-v8a、armeabi-v7a、x86_64。可用 `ANDROID_NDK_HOME` 指定已解压的相同版本 NDK。
 
 优先使用仓库内 Gradle Wrapper：
 

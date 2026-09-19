@@ -487,7 +487,8 @@ fun CardsContextPane(
         val compact = compactHeight || maxHeight <= 400.dp
         LazyColumn(
             Modifier.fillMaxSize()
-                .padding(horizontal = if (compact) 10.dp else 16.dp, vertical = if (compact) 6.dp else 12.dp),
+                .padding(horizontal = if (compact) 10.dp else 16.dp, vertical = if (compact) 6.dp else 12.dp)
+                .testTag("card-details-scroll"),
             state = contextListState,
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),

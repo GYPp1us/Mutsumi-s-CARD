@@ -8,6 +8,8 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
@@ -58,7 +60,7 @@ class InputFieldFocusVisibilityTest {
         compose.onAllNodesWithTag("card-list-item")[0].performClick()
         compose.onNodeWithContentDescription("编辑 key").performClick()
         waitForNode("key 编辑输入")
-        assertFocusedFieldsVisible("key 编辑输入")
+        assertFocusedFieldsVisible("key 编辑输入", scrollContainerTag = "card-details-scroll")
 
         compose.onNodeWithTag("nav-aibatch").performClick()
         waitForNode("ai-source-scroll")
@@ -123,6 +125,11 @@ class InputFieldFocusVisibilityTest {
     }
 
     private fun revealInScrollContainer(scrollContainerTag: String, targetTag: String) {
+        if (scrollContainerTag == "ai-source-scroll" || scrollContainerTag == "card-details-scroll") {
+            compose.onNodeWithTag(scrollContainerTag).performScrollToNode(hasTestTag(targetTag))
+            compose.onNodeWithTag(targetTag).assertIsDisplayed()
+            return
+        }
         repeat(8) {
             if (isDisplayed(targetTag)) return
             compose.onNodeWithTag(scrollContainerTag).performTouchInput { swipeUp() }

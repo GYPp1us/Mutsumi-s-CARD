@@ -1,0 +1,18 @@
+[package]
+name = "mutsumi-md2svg"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "mutsumi_md2svg"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+md2svg = { git = "https://github.com/GYPp1us/md2svg.git", rev = "91cf197ea5fb082dceeb09abc746712c9b670eca" }
+jni = "=0.21.1"
+resvg = { version = "=0.47.0", default-features = false }
+
+[profile.release]
+opt-level = 3
+strip = "debuginfo"

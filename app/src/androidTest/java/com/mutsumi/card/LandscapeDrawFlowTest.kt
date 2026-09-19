@@ -19,6 +19,9 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.mutsumi.card.draw.DrawCameraCenterXKey
+import com.mutsumi.card.draw.DrawMarkdownOffsetXKey
+import com.mutsumi.card.draw.DrawMarkdownWidthKey
+import com.mutsumi.card.draw.DrawLayerStyleKey
 import org.junit.Assert.assertTrue
 import org.junit.After
 import org.junit.Rule
@@ -29,6 +32,57 @@ import org.junit.runner.RunWith
 class LandscapeDrawFlowTest {
     @get:Rule
     val compose = createAndroidComposeRule<MainActivity>()
+
+    @Test
+    fun Markdown预览连续移动只影响选中面且边框与工具一致() {
+        openLandscapeDrawEditor()
+        compose.onNodeWithTag("draw-tool-markdown").performClick()
+        compose.onNodeWithTag("draw-markdown-front").performTextInput("# 位置测试")
+        hideSoftwareKeyboard()
+        compose.onNodeWithTag("draw-toggle-markdown").performClick()
+        val front = compose.onNodeWithTag("drawing-canvas-front")
+        val back = compose.onNodeWithTag("drawing-canvas-back")
+        val camera = front.fetchSemanticsNode().config[DrawCameraCenterXKey]
+        front.performTouchInput {
+            down(center)
+            repeat(8) { moveTo(center + Offset((it + 1) * 5f, 0f), 16) }
+            up()
+        }
+        assertTrue(front.fetchSemanticsNode().config[DrawMarkdownOffsetXKey] > 0f)
+        assertTrue(back.fetchSemanticsNode().config[DrawMarkdownOffsetXKey] == 0f)
+        assertTrue(front.fetchSemanticsNode().config[DrawCameraCenterXKey] == camera)
+        assertTrue(front.fetchSemanticsNode().config[DrawMarkdownWidthKey] == 256)
+        assertTrue(compose.onNodeWithTag("draw-tool-markdown").fetchSemanticsNode().config[DrawLayerStyleKey] == "虚线")
+        assertTrue(compose.onNodeWithTag("draw-face-front").fetchSemanticsNode().config[DrawLayerStyleKey] == "虚线")
+    }
+
+    @Test
+    fun Markdown双指缩放重新排版且三种工具线型可区分() {
+        openLandscapeDrawEditor()
+        compose.onNodeWithTag("draw-tool-markdown").performClick()
+        compose.onNodeWithTag("draw-markdown-front").performTextInput("# 缩放测试\n\n双指改变字号和换行。")
+        hideSoftwareKeyboard()
+        compose.onNodeWithTag("draw-toggle-markdown").performClick()
+        val front = compose.onNodeWithTag("drawing-canvas-front")
+        front.performTouchInput {
+            val gap = width * 0.1f
+            down(0, center - Offset(gap, 0f))
+            down(1, center + Offset(gap, 0f))
+            repeat(8) { index ->
+                val next = gap * (1f + (index + 1) * 0.1f)
+                updatePointerTo(0, center - Offset(next, 0f))
+                updatePointerTo(1, center + Offset(next, 0f))
+                move(16)
+            }
+            up(0); up(1)
+        }
+        assertTrue(front.fetchSemanticsNode().config[DrawMarkdownWidthKey] < 180)
+        compose.onNodeWithTag("draw-tool-base").performClick()
+        assertTrue(compose.onNodeWithTag("draw-face-front").fetchSemanticsNode().config[DrawLayerStyleKey] == "双线")
+        assertTrue(compose.onNodeWithTag("draw-tool-base").fetchSemanticsNode().config[DrawLayerStyleKey] == "双线")
+        compose.onNodeWithTag("draw-tool-pen").performClick()
+        assertTrue(compose.onNodeWithTag("draw-face-front").fetchSemanticsNode().config[DrawLayerStyleKey] == "单实线")
+    }
 
     @Test
     fun 双面录入在横屏下切换Markdown绘图并保存到学习卡片() {

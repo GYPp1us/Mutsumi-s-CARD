@@ -15,6 +15,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
@@ -45,7 +46,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Backspace
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Lock
@@ -76,6 +76,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -83,7 +84,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
@@ -106,14 +106,19 @@ import androidx.compose.ui.semantics.SemanticsPropertyKey
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.collectLatest
 import java.io.ByteArrayOutputStream
 import kotlin.math.hypot
 import kotlin.math.roundToInt
@@ -129,13 +134,26 @@ sealed interface DrawSaveResult {
 }
 
 private enum class CardFace { Front, Back }
-private enum class DrawTool { Pen, Eraser, Move, Markdown }
+private enum class DrawTool { Pen, Eraser, Move, Markdown, BaseImage }
+private val DrawTool.borderStyle: LayerBorderStyle get() = when (this) {
+    DrawTool.Markdown -> LayerBorderStyle.Dashed
+    DrawTool.BaseImage -> LayerBorderStyle.Double
+    else -> LayerBorderStyle.Solid
+}
 internal val DrawCameraCenterXKey = SemanticsPropertyKey<Float>("绘图相机中心 X")
+internal val DrawMarkdownOffsetXKey = SemanticsPropertyKey<Float>("Markdown 位置 X")
+internal val DrawMarkdownWidthKey = SemanticsPropertyKey<Int>("Markdown 排版宽度")
+internal val DrawMarkdownReadyKey = SemanticsPropertyKey<Boolean>("Markdown 预览就绪")
 
 private data class FacePoint(val position: Offset)
 private data class FaceStroke(val points: List<FacePoint>, val color: Color, val width: Float)
+private data class FaceSnapshot(
+    val strokes: List<FaceStroke>, val baseImageBytes: ByteArray?, val baseImageRect: CanvasRect?,
+    val camera: CanvasCamera?, val markdownSource: String, val markdownTransform: MarkdownTransform,
+)
 
 private class FaceDraft {
+    val inputEnabled = mutableStateOf(true)
     val strokes = mutableStateListOf<FaceStroke>()
     val currentPoints = mutableStateListOf<FacePoint>()
     val baseImageBytes = mutableStateOf<ByteArray?>(null)
@@ -145,8 +163,14 @@ private class FaceDraft {
     val viewport = mutableStateOf(IntSize.Zero)
     val markdownSource = mutableStateOf("")
     val markdownEditing = mutableStateOf(false)
+    val markdownTransform = mutableStateOf(MarkdownTransform())
+    val markdownError = mutableStateOf<String?>(null)
+    val markdownRendering = mutableStateOf(false)
 
     fun hasContent(): Boolean = strokes.isNotEmpty() || baseImageBytes.value != null || markdownSource.value.isNotBlank()
+
+    fun snapshot() = FaceSnapshot(strokes.toList(), baseImageBytes.value, baseImageRect.value,
+        camera.value, markdownSource.value, markdownTransform.value)
 
     fun clear() {
         strokes.clear()
@@ -156,6 +180,8 @@ private class FaceDraft {
         baseImageRect.value = null
         markdownSource.value = ""
         markdownEditing.value = false
+        markdownTransform.value = MarkdownTransform()
+        markdownError.value = null
         viewport.value.takeIf { it.width > 0 && it.height > 0 }?.let { size ->
             camera.value = CanvasCamera.initial(size.width.toFloat(), size.height.toFloat())
         }
@@ -172,7 +198,7 @@ private class DualFaceDrawingViewModel : ViewModel() {
     val tool = mutableStateOf(DrawTool.Pen)
     val penColor = mutableStateOf(Color(0xFF16352E))
     val penWidth = mutableFloatStateOf(6f)
-    val status = mutableStateOf("正面可选；背面必须有图片内容。")
+    val status = mutableStateOf("正面可空，背面必填。")
 
     fun face(side: CardFace): FaceDraft = if (side == CardFace.Front) front else back
 }
@@ -187,6 +213,7 @@ fun DrawScreen(onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult) {
     val activity = remember(context) { context.findActivity() }
     val currentOnSaveCard by rememberUpdatedState(onSaveCard)
     var pickerTarget by remember { mutableStateOf<CardFace?>(null) }
+    var clearTarget by remember { mutableStateOf<CardFace?>(null) }
 
     fun setMarkdownEditingFace(face: CardFace?) {
         if (session.isSaving.value) return
@@ -197,18 +224,18 @@ fun DrawScreen(onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult) {
     fun selectFace(face: CardFace) {
         if (session.isSaving.value) return
         if (session.activeFace.value != face) {
+            val wasEditing = session.face(session.activeFace.value).markdownEditing.value
             focusManager.clearFocus(force = true)
             session.activeFace.value = face
-        }
-        if (session.tool.value == DrawTool.Markdown) {
-            setMarkdownEditingFace(face)
+            setMarkdownEditingFace(if (wasEditing && session.tool.value == DrawTool.Markdown) face else null)
         }
     }
 
     fun selectTool(tool: DrawTool) {
         if (session.isSaving.value) return
         session.tool.value = tool
-        setMarkdownEditingFace(if (tool == DrawTool.Markdown) session.activeFace.value else null)
+        focusManager.clearFocus(force = true)
+        setMarkdownEditingFace(if (tool == DrawTool.Markdown && session.face(session.activeFace.value).markdownSource.value.isBlank()) session.activeFace.value else null)
     }
 
     DisposableEffect(activity) {
@@ -224,7 +251,10 @@ fun DrawScreen(onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult) {
 
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (session.isSaving.value) return@rememberLauncherForActivityResult
-        if (uri == null) return@rememberLauncherForActivityResult
+        if (uri == null) {
+            session.status.value = "已取消插入底图。"
+            return@rememberLauncherForActivityResult
+        }
         val face = requireNotNull(pickerTarget) { "未指定底图目标卡面" }
         val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
             ?: error("无法读取底图：$uri")
@@ -236,6 +266,8 @@ fun DrawScreen(onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult) {
         bitmap.recycle()
         draft.baseImageBytes.value = bytes
         session.activeFace.value = face
+        session.tool.value = DrawTool.BaseImage
+        setMarkdownEditingFace(null)
         session.status.value = "${face.label}底图已插入。"
     }
 
@@ -250,13 +282,20 @@ fun DrawScreen(onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult) {
             session.status.value = "背面需要笔迹、底图或 Markdown 内容。"
             return
         }
-        val back = renderFacePng(session.back, markdownRenderer)
         val frontFallsBackToKey = !session.front.hasContent()
-        val front = if (frontFallsBackToKey) null else renderFacePng(session.front, markdownRenderer)
+        val frontSnapshot = session.front.snapshot()
+        val backSnapshot = session.back.snapshot()
         focusManager.clearFocus(force = true)
         session.isSaving.value = true
+        session.front.inputEnabled.value = false
+        session.back.inputEnabled.value = false
         scope.launch {
             try {
+                val (front, back) = withContext(MarkdownRenderDispatcher) {
+                    val back = renderFacePng(backSnapshot, markdownRenderer)
+                    val front = if (frontFallsBackToKey) null else renderFacePng(frontSnapshot, markdownRenderer)
+                    front to back
+                }
                 persistDrawnCard(
                     onSave = { currentOnSaveCard(key, DrawnCardImage(front, back)) },
                     onPersisted = { message ->
@@ -271,8 +310,12 @@ fun DrawScreen(onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult) {
                         session.status.value = "卡片保存失败：$message"
                     },
                 )
+            } catch (invalid: IllegalArgumentException) {
+                session.status.value = "无法保存：${invalid.message}"
             } finally {
                 session.isSaving.value = false
+                session.front.inputEnabled.value = true
+                session.back.inputEnabled.value = true
             }
         }
     }
@@ -296,17 +339,15 @@ fun DrawScreen(onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult) {
         } else {
             val compactControls = maxWidth < 960.dp || maxHeight < 480.dp
             val contextWidth = if (compactControls) 184.dp else 224.dp
-            val toolRailWidth = if (compactControls) 96.dp else 56.dp
+            val toolRailWidth = if (compactControls) 104.dp else 64.dp
             Row(
-                modifier = Modifier.fillMaxSize().padding(4.dp),
+                modifier = Modifier.fillMaxSize().background(Color(0xFFE7EBE7)).padding(6.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
             EditorToolRail(
-                activeFace = session.activeFace.value,
                 tool = session.tool.value,
                 compact = compactControls,
                 onToolChange = ::selectTool,
-                onFaceChange = ::selectFace,
                 onInsertBase = {
                     if (!session.isSaving.value) {
                         pickerTarget = session.activeFace.value
@@ -316,11 +357,14 @@ fun DrawScreen(onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult) {
                 onUndo = {
                     if (!session.isSaving.value) {
                         val draft = session.face(session.activeFace.value)
-                        if (draft.strokes.isNotEmpty()) draft.strokes.removeAt(draft.strokes.lastIndex)
+                        if (draft.strokes.isNotEmpty()) {
+                            draft.strokes.removeAt(draft.strokes.lastIndex)
+                            session.status.value = "已撤销${session.activeFace.value.label}上一笔。"
+                        } else session.status.value = "当前卡面没有可撤销的笔迹。"
                     }
                 },
                 onClear = {
-                    if (!session.isSaving.value) session.face(session.activeFace.value).clear()
+                    if (!session.isSaving.value) clearTarget = session.activeFace.value
                 },
                 modifier = Modifier.width(toolRailWidth).fillMaxHeight(),
             )
@@ -354,6 +398,17 @@ fun DrawScreen(onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult) {
                 status = session.status.value,
                 isSaving = session.isSaving.value,
                 markdownEditing = session.face(session.activeFace.value).markdownEditing.value,
+                tool = session.tool.value,
+                markdownTransform = session.face(session.activeFace.value).markdownTransform.value,
+                onMarkdownTransform = { session.face(session.activeFace.value).markdownTransform.value = it },
+                onResetBase = {
+                    val draft = session.face(session.activeFace.value)
+                    val size = draft.baseImageSize.value
+                    if (size != IntSize.Zero) {
+                        draft.baseImageRect.value = fitImageInCardWorld(size.width, size.height)
+                        session.status.value = "已重置${session.activeFace.value.label}底图位置。"
+                    } else session.status.value = "请先插入底图。"
+                },
                 onKeyChange = {
                     if (!session.isSaving.value) session.keyText.value = it
                 },
@@ -402,6 +457,19 @@ fun DrawScreen(onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult) {
             }
         }
     }
+    clearTarget?.let { face ->
+        AlertDialog(
+            onDismissRequest = { clearTarget = null },
+            title = { Text("清空${face.label}？") },
+            text = { Text("将移除这一面的笔迹、Markdown 和底图。") },
+            confirmButton = { TextButton(onClick = {
+                session.face(face).clear()
+                session.status.value = "${face.label}已清空。"
+                clearTarget = null
+            }) { Text("清空") } },
+            dismissButton = { TextButton(onClick = { clearTarget = null }) { Text("取消") } },
+        )
+    }
 }
 
 internal suspend fun persistDrawnCard(
@@ -417,29 +485,20 @@ internal suspend fun persistDrawnCard(
 
 @Composable
 private fun EditorToolRail(
-    activeFace: CardFace,
     tool: DrawTool,
     compact: Boolean,
     onToolChange: (DrawTool) -> Unit,
-    onFaceChange: (CardFace) -> Unit,
     onInsertBase: () -> Unit,
     onUndo: () -> Unit,
     onClear: () -> Unit,
     modifier: Modifier,
 ) {
-    val faceActions = listOf(
-        EditorToolAction(Icons.Default.Description, "选择正面画布", "draw-face-selector-front", activeFace == CardFace.Front) {
-            onFaceChange(CardFace.Front)
-        },
-        EditorToolAction(Icons.Default.Image, "选择背面画布", "draw-face-selector-back", activeFace == CardFace.Back) {
-            onFaceChange(CardFace.Back)
-        },
-    )
     val toolActions = listOf(
         EditorToolAction(Icons.Default.Edit, "画笔", "draw-tool-pen", tool == DrawTool.Pen) { onToolChange(DrawTool.Pen) },
         EditorToolAction(Icons.Default.Backspace, "橡皮擦", "draw-tool-eraser", tool == DrawTool.Eraser) { onToolChange(DrawTool.Eraser) },
         EditorToolAction(Icons.Default.OpenWith, "移动和缩放画布", "draw-tool-move", tool == DrawTool.Move) { onToolChange(DrawTool.Move) },
-        EditorToolAction(Icons.Default.Code, "编辑 Markdown", "draw-tool-markdown", tool == DrawTool.Markdown) { onToolChange(DrawTool.Markdown) },
+        EditorToolAction(Icons.Default.Code, "Markdown 图层", "draw-tool-markdown", tool == DrawTool.Markdown) { onToolChange(DrawTool.Markdown) },
+        EditorToolAction(Icons.Default.Image, "移动和缩放底图", "draw-tool-base", tool == DrawTool.BaseImage) { onToolChange(DrawTool.BaseImage) },
     )
     val actionButtons = listOf(
         EditorToolAction(Icons.Default.Image, "插入底图", "draw-insert-base", onClick = onInsertBase),
@@ -449,21 +508,19 @@ private fun EditorToolRail(
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f))
-            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surface)
             .padding(vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         if (compact) {
-            listOf(faceActions, toolActions.take(2), toolActions.drop(2), actionButtons.take(2), actionButtons.drop(2)).forEach { row ->
+            (toolActions.take(4).chunked(2) + listOf(listOf(toolActions.last(), actionButtons.first()), actionButtons.drop(1))).forEach { row ->
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    row.forEach { action -> EditorToolActionButton(action, 40.dp) }
-                    if (row.size == 1) Spacer(Modifier.size(40.dp))
+                    row.forEach { action -> EditorToolActionButton(action, 44.dp) }
+                    if (row.size == 1) Spacer(Modifier.size(44.dp))
                 }
             }
         } else {
-            faceActions.forEach { action -> EditorToolActionButton(action, 48.dp) }
             Box(Modifier.width(30.dp).height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
             toolActions.forEach { action -> EditorToolActionButton(action, 48.dp) }
             Box(Modifier.width(30.dp).height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
@@ -482,14 +539,36 @@ private data class EditorToolAction(
 
 @Composable
 private fun EditorToolActionButton(action: EditorToolAction, buttonSize: Dp) {
-    ToolIconButton(
-        icon = action.icon,
-        contentDescription = action.contentDescription,
-        selected = action.selected,
-        onClick = action.onClick,
-        modifier = Modifier.testTag(action.testTag),
-        buttonSize = buttonSize,
-    )
+    val style = when (action.testTag) {
+        "draw-tool-markdown" -> LayerBorderStyle.Dashed
+        "draw-tool-base", "draw-insert-base" -> LayerBorderStyle.Double
+        else -> LayerBorderStyle.Solid
+    }
+    val label = when (action.testTag) {
+        "draw-face-selector-front" -> "正面"
+        "draw-face-selector-back" -> "背面"
+        "draw-tool-pen" -> "画笔"
+        "draw-tool-eraser" -> "橡皮"
+        "draw-tool-move" -> "画布"
+        "draw-tool-markdown" -> "文档"
+        "draw-tool-base" -> "底图"
+        "draw-insert-base" -> "插图"
+        "draw-undo" -> "撤销"
+        else -> "清空"
+    }
+    val color = if (action.selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+    Column(
+        modifier = Modifier.size(buttonSize).testTag(action.testTag)
+            .clip(RoundedCornerShape(7.dp))
+            .background(if (action.selected) Color(0xFFDCE8E2) else Color.Transparent)
+            .layerBorder(style, if (action.selected) color else MaterialTheme.colorScheme.outlineVariant, action.selected)
+            .clickable(onClick = action.onClick).semantics { contentDescription = action.contentDescription },
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(action.icon, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
+        Text(label, fontSize = 10.sp, lineHeight = 13.sp, color = color)
+    }
 }
 
 @Composable
@@ -507,7 +586,7 @@ private fun ToolIconButton(
         modifier = modifier
             .size(buttonSize)
             .clip(shape)
-            .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+            .background(if (selected) Color(0xFFDCE8E2) else Color.Transparent)
             .border(
                 width = 1.dp,
                 color = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
@@ -531,6 +610,10 @@ private fun EditorContextPanel(
     status: String,
     isSaving: Boolean,
     markdownEditing: Boolean,
+    tool: DrawTool,
+    markdownTransform: MarkdownTransform,
+    onMarkdownTransform: (MarkdownTransform) -> Unit,
+    onResetBase: () -> Unit,
     onKeyChange: (String) -> Unit,
     onKeyLockChange: (Boolean) -> Unit,
     onColorChange: (Color) -> Unit,
@@ -544,7 +627,6 @@ private fun EditorContextPanel(
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
             .padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -556,38 +638,43 @@ private fun EditorContextPanel(
         )
         Column(
             modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text("画笔颜色", style = MaterialTheme.typography.labelMedium)
+            Text("${tool.borderStyle.layerLabel} · ${tool.borderStyle.label}", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            if (tool == DrawTool.Markdown) {
+                MarkdownToggleButton(markdownEditing, onToggleMarkdown)
+            }
+            if (tool == DrawTool.Markdown) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { onMarkdownTransform(markdownTransform.transform(512f, 0f, 0f, 0f, 0.9f)) }, modifier = Modifier.weight(1f).testTag("draw-md-smaller")) { Text("字小") }
+                    TextButton(onClick = { onMarkdownTransform(markdownTransform.transform(512f, 0f, 0f, 0f, 1.1f)) }, modifier = Modifier.weight(1f).testTag("draw-md-larger")) { Text("字大") }
+                }
+                TextButton(onClick = { onMarkdownTransform(MarkdownTransform()) }, modifier = Modifier.fillMaxWidth().testTag("draw-md-reset")) { Text("重置文档位置与字号") }
+            } else if (tool == DrawTool.BaseImage) {
+                Text("单指移动底图，双指等比缩放。", style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = onResetBase, modifier = Modifier.fillMaxWidth()) { Text("重置底图位置") }
+            } else {
             PenColorChoices(
                 penColor = penColor,
                 onColorChange = onColorChange,
                 onOpenCustomColor = { showCustomColorDialog = true },
             )
-            Text("笔刷 ${penWidth.roundToInt()} px", style = MaterialTheme.typography.labelMedium)
-            Slider(
-                value = penWidth,
-                onValueChange = onWidthChange,
-                valueRange = 2f..24f,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Button(
-                onClick = onToggleMarkdown,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("draw-toggle-markdown"),
-            ) {
-                Icon(
-                    imageVector = if (markdownEditing) Icons.Default.Visibility else Icons.Default.Code,
-                    contentDescription = null,
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("${penWidth.roundToInt()} px", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(36.dp))
+                Slider(
+                    value = penWidth,
+                    onValueChange = onWidthChange,
+                    valueRange = 2f..24f,
+                    modifier = Modifier.weight(1f).semantics { contentDescription = "笔刷大小" },
                 )
-                Spacer(Modifier.width(6.dp))
-                Text(if (markdownEditing) "预览 Markdown" else "编辑 Markdown", maxLines = 1)
+            }
             }
         }
         Text(
             text = status,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            minLines = 2,
+            minLines = 1,
             maxLines = 3,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.fillMaxWidth().testTag("draw-status"),
@@ -595,6 +682,7 @@ private fun EditorContextPanel(
         Button(
             onClick = onSave,
             enabled = !isSaving,
+            shape = RoundedCornerShape(8.dp),
             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("save-card"),
         ) {
             Icon(Icons.Default.Save, contentDescription = null)
@@ -611,6 +699,19 @@ private fun EditorContextPanel(
                 showCustomColorDialog = false
             },
         )
+    }
+}
+
+@Composable
+private fun MarkdownToggleButton(editing: Boolean, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("draw-toggle-markdown")
+            .layerBorder(LayerBorderStyle.Dashed, MaterialTheme.colorScheme.primary),
+    ) {
+        Icon(if (editing) Icons.Default.Visibility else Icons.Default.Code, contentDescription = null)
+        Spacer(Modifier.width(6.dp))
+        Text(if (editing) "查看预览" else "编辑文档", maxLines = 1)
     }
 }
 
@@ -692,10 +793,10 @@ private fun ColorSwatch(
         modifier = Modifier
             .size(40.dp)
             .clip(shape)
-            .background(color)
-            .border(if (selected) 3.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else Color.Black, shape),
+            .border(1.dp, if (selected) MaterialTheme.colorScheme.primary else Color.Transparent, shape)
+            .semantics { contentDescription = label },
     ) {
-        Box(modifier = Modifier.fillMaxSize().semantics { contentDescription = label })
+        Box(modifier = Modifier.size(26.dp).clip(shape).background(color))
     }
 }
 
@@ -767,13 +868,26 @@ private fun FacePanel(
     modifier: Modifier,
 ) {
     val borderColor = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+    val borderStyle = if (active) tool.borderStyle else LayerBorderStyle.Solid
     val frontFallsBackToKey = face == CardFace.Front && !draft.hasContent()
     Column(
         modifier = modifier.testTag("draw-face-${face.name.lowercase()}").semantics {
             contentDescription = "${face.label}画布，${faceSaveWatermark(face, frontFallsBackToKey).joinToString("，")}"
+            this[DrawLayerStyleKey] = borderStyle.label
         },
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        Row(
+            Modifier.fillMaxWidth().height(32.dp).testTag("draw-face-selector-${face.name.lowercase()}").clickable(onClick = onSelect).padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(face.label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+            Text(
+                if (active) tool.borderStyle.layerLabel else if (frontFallsBackToKey) "文字回退" else "图片",
+                style = MaterialTheme.typography.labelSmall, color = if (active) borderColor else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         BoxWithConstraints(
             modifier = Modifier.weight(1f).fillMaxWidth(),
             contentAlignment = Alignment.Center,
@@ -785,14 +899,15 @@ private fun FacePanel(
                 Modifier.width(maxWidth).aspectRatio(DrawingCanvasSpec.aspectRatio)
             }
             Box(
-                modifier = canvasModifier.border(2.dp, borderColor, RoundedCornerShape(7.dp)).clip(RoundedCornerShape(7.dp)),
+                modifier = canvasModifier.layerBorder(borderStyle, borderColor, active).clip(RoundedCornerShape(7.dp)),
             ) {
                 if (draft.markdownEditing.value) {
                     OutlinedTextField(
                         value = draft.markdownSource.value,
-                        onValueChange = { draft.markdownSource.value = it },
-                        label = { Text("Markdown") },
-                        modifier = Modifier.fillMaxSize().heightIn(min = 56.dp).testTag("draw-markdown-${face.name.lowercase()}"),
+                        enabled = draft.inputEnabled.value,
+                        onValueChange = { draft.markdownSource.value = it; draft.markdownError.value = null },
+                        label = { Text("文档源码") },
+                        modifier = Modifier.fillMaxSize().background(Color.White).padding(4.dp).heightIn(min = 56.dp).testTag("draw-markdown-${face.name.lowercase()}"),
                         textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                         placeholder = { Text("# 标题\n\n${'$'}E = mc^2${'$'}\n\n| 列 | 值 |\n|---|---|\n| A | 1 |") },
                     )
@@ -808,6 +923,15 @@ private fun FacePanel(
                         onActivate = onSelect,
                         modifier = Modifier.fillMaxSize().testTag("drawing-canvas-${face.name.lowercase()}"),
                     )
+                }
+                draft.markdownError.value?.let { message ->
+                    Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall,
+                        maxLines = 4, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.errorContainer).padding(8.dp).testTag("draw-markdown-error-${face.name.lowercase()}"))
+                }
+                if (draft.markdownRendering.value) {
+                    Box(Modifier.align(Alignment.TopStart).fillMaxWidth().height(2.dp).background(MaterialTheme.colorScheme.primary))
                 }
             }
         }
@@ -830,10 +954,31 @@ private fun FaceCanvas(
     val baseBitmap = remember(baseBytes) { baseBytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) ?: error("底图无法解码") } }
     DisposableEffect(baseBitmap) { onDispose { baseBitmap?.takeUnless(Bitmap::isRecycled)?.recycle() } }
     val size = draft.viewport.value
-    val markdownBitmap = remember(draft.markdownSource.value, size) {
-        if (size.width > 0 && size.height > 0) markdownRenderer.render(draft.markdownSource.value, size.width, size.height) else null
+    var preview by remember(draft) { mutableStateOf<MarkdownPreview?>(null) }
+    LaunchedEffect(draft, markdownRenderer) {
+        snapshotFlow { Triple(draft.markdownSource.value, draft.markdownTransform.value, draft.viewport.value) }
+            .collectLatest { (source, transform, viewport) ->
+                if (viewport.width <= 0 || viewport.height <= 0) return@collectLatest
+                var allocated: Bitmap? = null
+                draft.markdownRendering.value = source.isNotBlank()
+                try {
+                    withContext(MarkdownRenderDispatcher) {
+                        ensureActive()
+                        allocated = markdownRenderer.render(source, viewport.width, viewport.height, transform)
+                    }
+                    preview = MarkdownPreview(allocated, source, transform)
+                    allocated = null
+                    draft.markdownError.value = null
+                } catch (invalid: IllegalArgumentException) {
+                    preview = null
+                    draft.markdownError.value = invalid.message ?: "文档无法排版，请检查源码。"
+                } finally {
+                    allocated?.recycle()
+                    draft.markdownRendering.value = false
+                }
+            }
     }
-    DisposableEffect(markdownBitmap) { onDispose { markdownBitmap?.takeUnless(Bitmap::isRecycled)?.recycle() } }
+    DisposableEffect(draft) { onDispose { preview?.bitmap?.takeUnless(Bitmap::isRecycled)?.recycle() } }
     LaunchedEffect(size) {
         if (size.width > 0 && size.height > 0) {
             draft.camera.value = draft.camera.value?.withViewport(size.width.toFloat(), size.height.toFloat())
@@ -852,25 +997,86 @@ private fun FaceCanvas(
         DrawTool.Pen -> immediateStrokeInput(draft, penColor, penWidth, latestCamera, onActivate)
         DrawTool.Eraser -> immediateEraserInput(draft, latestCamera, onActivate)
         DrawTool.Move -> moveInput(draft, latestCamera, onActivate)
-        DrawTool.Markdown -> activateOnlyInput(onActivate)
+        DrawTool.Markdown -> markdownInput(draft, onActivate)
+        DrawTool.BaseImage -> baseImageInput(draft, latestCamera, onActivate)
     }
     Canvas(
         modifier = modifier
             .background(Color.White)
             .onSizeChanged { draft.viewport.value = it }
-            .semantics { activeCamera?.let { this[DrawCameraCenterXKey] = it.centerX } }
-            .then(pointerModifier),
+            .semantics {
+                activeCamera?.let { this[DrawCameraCenterXKey] = it.centerX }
+                this[DrawMarkdownOffsetXKey] = draft.markdownTransform.value.offsetX
+                this[DrawMarkdownWidthKey] = draft.markdownTransform.value.layoutWidth
+                this[DrawMarkdownReadyKey] = preview?.let {
+                    it.source == draft.markdownSource.value && it.transform == draft.markdownTransform.value
+                } == true
+            }
+            .then(if (draft.inputEnabled.value) pointerModifier else Modifier),
     ) {
         clipRect {
-            drawFaceWatermark(face, frontFallsBackToKey)
+            if (!draft.hasContent()) drawFaceWatermark(face, frontFallsBackToKey)
             if (activeCamera == null) return@clipRect
             drawBasePreview(baseBitmap, draft.baseImageRect.value, activeCamera)
-            markdownBitmap?.let { drawImage(it.asImageBitmap()) }
+            preview?.takeIf { it.source == draft.markdownSource.value }?.let { rendered ->
+                rendered.bitmap?.let { bitmap ->
+                    val current = draft.markdownTransform.value
+                    val factor = size.width / DrawingCanvasSpec.width.toFloat()
+                    drawIntoCanvas { canvas ->
+                        canvas.nativeCanvas.drawBitmap(bitmap,
+                            (current.offsetX - rendered.transform.offsetX) * factor,
+                            (current.offsetY - rendered.transform.offsetY) * factor, null)
+                    }
+                }
+            }
             draft.strokes.forEach { drawStrokePreview(it, activeCamera) }
             drawStrokePreview(FaceStroke(draft.currentPoints.toList(), penColor, penWidth / activeCamera.scale), activeCamera)
         }
     }
 }
+
+private data class MarkdownPreview(val bitmap: Bitmap?, val source: String, val transform: MarkdownTransform)
+
+private fun markdownInput(draft: FaceDraft, onActivate: () -> Unit): Modifier = Modifier.pointerInput(draft, DrawTool.Markdown) {
+    awaitEachGesture {
+        awaitFirstDown(requireUnconsumed = false)
+        onActivate()
+        do {
+            val event = awaitPointerEvent()
+            val anchor = event.calculateCentroid(useCurrent = false)
+            val pan = event.calculatePan()
+            val zoom = event.calculateZoom()
+            val scale = DrawingCanvasSpec.width.toFloat() / size.width
+            if (anchor.x.isFinite() && anchor.y.isFinite() && (pan != Offset.Zero || zoom != 1f)) {
+                draft.markdownTransform.value = draft.markdownTransform.value.transform(
+                    anchor.x * scale, anchor.y * scale, pan.x * scale, pan.y * scale, zoom,
+                )
+            }
+            event.changes.forEach { it.consume() }
+        } while (event.changes.any { it.pressed })
+    }
+}
+
+private fun baseImageInput(draft: FaceDraft, latestCamera: State<CanvasCamera?>, onActivate: () -> Unit): Modifier =
+    Modifier.pointerInput(draft, DrawTool.BaseImage) {
+        awaitEachGesture {
+            awaitFirstDown(requireUnconsumed = false)
+            onActivate()
+            do {
+                val event = awaitPointerEvent()
+                val camera = latestCamera.value
+                val rect = draft.baseImageRect.value
+                val anchor = event.calculateCentroid(useCurrent = false)
+                val pan = event.calculatePan()
+                val zoom = event.calculateZoom()
+                if (camera != null && rect != null && anchor.x.isFinite() && anchor.y.isFinite()) {
+                    val world = camera.screenToWorld(anchor)
+                    draft.baseImageRect.value = rect.transformImage(world.x, world.y, pan.x / camera.scale, pan.y / camera.scale, zoom)
+                }
+                event.changes.forEach { it.consume() }
+            } while (event.changes.any { it.pressed })
+        }
+    }
 
 private fun immediateStrokeInput(
     draft: FaceDraft,
@@ -878,7 +1084,7 @@ private fun immediateStrokeInput(
     penWidth: Float,
     latestCamera: State<CanvasCamera?>,
     onActivate: () -> Unit,
-): Modifier = Modifier.pointerInput(draft, penColor, penWidth) {
+): Modifier = Modifier.pointerInput(draft, DrawTool.Pen, penColor, penWidth) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false)
         onActivate()
@@ -910,7 +1116,7 @@ private fun immediateEraserInput(
     draft: FaceDraft,
     latestCamera: State<CanvasCamera?>,
     onActivate: () -> Unit,
-): Modifier = Modifier.pointerInput(draft) {
+): Modifier = Modifier.pointerInput(draft, DrawTool.Eraser) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false)
         onActivate()
@@ -934,7 +1140,7 @@ private fun moveInput(
     draft: FaceDraft,
     latestCamera: State<CanvasCamera?>,
     onActivate: () -> Unit,
-): Modifier = Modifier.pointerInput(draft) {
+): Modifier = Modifier.pointerInput(draft, DrawTool.Move) {
     awaitEachGesture {
         awaitFirstDown(requireUnconsumed = false)
         onActivate()
@@ -950,13 +1156,6 @@ private fun moveInput(
             }
             event.changes.forEach { if (it.pressed) it.consume() }
         } while (event.changes.any { it.pressed })
-    }
-}
-
-private fun activateOnlyInput(onActivate: () -> Unit): Modifier = Modifier.pointerInput(onActivate) {
-    awaitEachGesture {
-        awaitFirstDown(requireUnconsumed = false)
-        onActivate()
     }
 }
 
@@ -1025,11 +1224,12 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawStrokePreview(s
     drawPath(path, stroke.color, style = Stroke(stroke.width * camera.scale, cap = StrokeCap.Round))
 }
 
-private fun renderFacePng(draft: FaceDraft, markdownRenderer: MarkdownLayerRenderer): ByteArray {
-    val camera = requireNotNull(draft.camera.value) { "画布相机尚未初始化" }
-    val base = draft.baseImageBytes.value?.let { BitmapFactory.decodeByteArray(it, 0, it.size) ?: error("底图无法解码") }
+private fun renderFacePng(draft: FaceSnapshot, markdownRenderer: MarkdownLayerRenderer): ByteArray {
+    val camera = requireNotNull(draft.camera) { "画布相机尚未初始化" }
+    val base = draft.baseImageBytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) ?: error("底图无法解码") }
     try {
         val bitmap = Bitmap.createBitmap(DrawingCanvasSpec.width, DrawingCanvasSpec.height, Bitmap.Config.ARGB_8888)
+        try {
         val canvas = AndroidCanvas(bitmap)
         canvas.drawColor(android.graphics.Color.WHITE)
         val exportScale = DrawingCanvasSpec.width / camera.visibleWidth
@@ -1040,17 +1240,17 @@ private fun renderFacePng(draft: FaceDraft, markdownRenderer: MarkdownLayerRende
             viewportWidth = DrawingCanvasSpec.width.toFloat(),
             viewportHeight = DrawingCanvasSpec.height.toFloat(),
         )
-        drawBaseExport(canvas, base, draft.baseImageRect.value, exportCamera)
-        markdownRenderer.render(draft.markdownSource.value, DrawingCanvasSpec.width, DrawingCanvasSpec.height)?.let { markdown ->
-            canvas.drawBitmap(markdown, 0f, 0f, null)
-            markdown.recycle()
+        drawBaseExport(canvas, base, draft.baseImageRect, exportCamera)
+        markdownRenderer.render(draft.markdownSource, DrawingCanvasSpec.width, DrawingCanvasSpec.height, draft.markdownTransform)?.let { markdown ->
+            try { canvas.drawBitmap(markdown, 0f, 0f, null) } finally { markdown.recycle() }
         }
         draft.strokes.forEach { drawStrokeExport(canvas, it, exportCamera) }
-        return try {
+        return run {
             ByteArrayOutputStream().use { output ->
                 check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "PNG 编码失败" }
                 output.toByteArray()
             }
+        }
         } finally {
             bitmap.recycle()
         }

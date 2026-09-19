@@ -52,7 +52,7 @@ class CardsScreenTest {
 
         compose.onNodeWithTag("卡片缩略图-11", useUnmergedTree = true)
             .assertWidthIsEqualTo(36.dp)
-            .assertHeightIsEqualTo(58.dp)
+            .assertHeightIsEqualTo((36f * 85.60f / 53.98f).dp)
         compose.onNodeWithText("细胞").performClick()
 
         compose.onNodeWithTag("卡片详情弹层").assertIsDisplayed()

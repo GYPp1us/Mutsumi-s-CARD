@@ -8,3 +8,4 @@ artifacts/
 local.properties
 *.iml
 native/**/target/
+__pycache__/

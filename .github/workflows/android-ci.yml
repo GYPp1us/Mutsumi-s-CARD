@@ -25,6 +25,8 @@ jobs:
 
       - name: 设置 Android SDK
         uses: android-actions/setup-android@v4.0.1
+        with:
+          packages: platform-tools
 
       - name: 安装 Android 包
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865"

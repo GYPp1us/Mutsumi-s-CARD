@@ -92,6 +92,9 @@ jobs:
           MUTSUMI_RELEASE_KEY_PASSWORD: ${{ secrets.MUTSUMI_RELEASE_KEY_PASSWORD }}
         run: bash gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebugAndroidTest :app:assembleRelease
 
+      - name: 验证各架构原生库完整性
+        run: python3 scripts/verify_native_libraries.py app/build/outputs/apk/release/app-release.apk
+
       - name: 验证 APK 签名和历史证书
         run: |
           APK=app/build/outputs/apk/release/app-release.apk

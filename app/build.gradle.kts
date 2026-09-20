@@ -29,6 +29,10 @@ android {
         versionCode = 27
         versionName = "0.8.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk {
+            abiFilters += providers.gradleProperty("md2svgAbis")
+                .orElse("arm64-v8a,armeabi-v7a,x86_64").get().split(",")
+        }
     }
 
     signingConfigs {

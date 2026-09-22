@@ -17,6 +17,8 @@ val releaseSigningReady = listOf(
     releaseKeyPassword,
 ).all { !it.isNullOrBlank() }
 
+val splitApks = providers.gradleProperty("splitApks").map(String::toBoolean).orElse(false)
+
 android {
     ndkVersion = "29.0.14206865"
     namespace = "com.mutsumi.card"
@@ -26,10 +28,10 @@ android {
         applicationId = "com.mutsumi.card"
         minSdk = 26
         targetSdk = 36
-        versionCode = 27
-        versionName = "0.8.0"
+        versionCode = 28
+        versionName = "0.8.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        ndk {
+        if (!splitApks.get()) ndk {
             abiFilters += providers.gradleProperty("md2svgAbis")
                 .orElse("arm64-v8a,armeabi-v7a,x86_64").get().split(",")
         }
@@ -51,12 +53,25 @@ android {
             applicationIdSuffix = ".debug"
         }
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             if (releaseSigningReady) {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
     }
+
+    splits {
+        abi {
+            isEnable = splitApks.get()
+            reset()
+            include(*providers.gradleProperty("md2svgAbis").orElse("arm64-v8a,armeabi-v7a,x86_64").get().split(",").toTypedArray())
+            isUniversalApk = true
+        }
+    }
+    // 下载包压缩原生库；安装时由 Android 解压，字体和排版功能保持完整。
+    packaging { jniLibs { useLegacyPackaging = true } }
 
     buildFeatures {
         compose = true

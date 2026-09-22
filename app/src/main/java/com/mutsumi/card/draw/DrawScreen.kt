@@ -10,6 +10,13 @@ import android.graphics.Canvas as AndroidCanvas
 import android.graphics.Paint
 import android.graphics.Path as AndroidPath
 import android.graphics.RectF
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
@@ -209,6 +216,12 @@ fun DrawScreen(onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(session.status.value) {
+        if (session.isKeyLocked.value && !session.status.value.startsWith("文字 key 已锁定")) {
+            snackbar.showSnackbar(session.status.value)
+        }
+    }
     val markdownRenderer = remember(context) { MarkdownLayerRenderer(context) }
     val activity = remember(context) { context.findActivity() }
     val currentOnSaveCard by rememberUpdatedState(onSaveCard)
@@ -338,7 +351,10 @@ fun DrawScreen(onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult) {
             }
         } else {
             val compactControls = maxWidth < 960.dp || maxHeight < 480.dp
-            val contextWidth = if (compactControls) 184.dp else 224.dp
+            val contextWidth by animateDpAsState(
+                targetValue = if (session.isKeyLocked.value) 64.dp else if (compactControls) 184.dp else 224.dp,
+                animationSpec = tween(260), label = "属性栏收起",
+            )
             val toolRailWidth = if (compactControls) 104.dp else 64.dp
             Row(
                 modifier = Modifier.fillMaxSize().background(Color(0xFFE7EBE7)).padding(6.dp),
@@ -414,6 +430,7 @@ fun DrawScreen(onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult) {
                 },
                 onKeyLockChange = { locked ->
                     if (!session.isSaving.value) {
+                        focusManager.clearFocus(force = true)
                         session.isKeyLocked.value = locked
                         session.status.value = if (locked) "文字 key 已锁定，绘图时不会被误改。" else "文字 key 已解锁。"
                     }
@@ -436,6 +453,7 @@ fun DrawScreen(onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult) {
                 )
             }
         }
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(horizontal = 76.dp, vertical = 8.dp))
         if (session.isSaving.value) {
             Box(
                 modifier = Modifier
@@ -624,81 +642,113 @@ private fun EditorContextPanel(
 ) {
     var showCustomColorDialog by remember { mutableStateOf(false) }
     Column(
-        modifier = modifier
+        modifier = modifier.testTag("draw-context-panel")
             .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surface)
             .padding(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        KeyTextField(
-            value = keyText,
-            locked = keyLocked,
-            onValueChange = onKeyChange,
-            onLockChange = onKeyLockChange,
-        )
+        if (keyLocked) {
+            ContextRailButton(Icons.Default.Lock, "锁定", "解锁文字 key", "draw-key-lock") { onKeyLockChange(false) }
+        } else {
+            KeyTextField(keyText, false, onKeyChange, onKeyLockChange)
+        }
         Column(
-            modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
+            modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text("${tool.borderStyle.layerLabel} · ${tool.borderStyle.label}", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            if (!keyLocked) Text("${tool.borderStyle.layerLabel} · ${tool.borderStyle.label}", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
             if (tool == DrawTool.Markdown) {
-                MarkdownToggleButton(markdownEditing, onToggleMarkdown)
-            }
-            if (tool == DrawTool.Markdown) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = { onMarkdownTransform(markdownTransform.transform(512f, 0f, 0f, 0f, 0.9f)) }, modifier = Modifier.weight(1f).testTag("draw-md-smaller")) { Text("字小") }
-                    TextButton(onClick = { onMarkdownTransform(markdownTransform.transform(512f, 0f, 0f, 0f, 1.1f)) }, modifier = Modifier.weight(1f).testTag("draw-md-larger")) { Text("字大") }
+                if (keyLocked) {
+                    ContextRailButton(
+                        if (markdownEditing) Icons.Default.Visibility else Icons.Default.Code,
+                        if (markdownEditing) "预览" else "编辑",
+                        if (markdownEditing) "查看预览" else "编辑文档", "draw-toggle-markdown",
+                        style = LayerBorderStyle.Dashed, onClick = onToggleMarkdown,
+                    )
+                    ContextRailButton(Icons.Default.Add, "字大", "增大文档字号", "draw-md-larger", LayerBorderStyle.Dashed) {
+                        onMarkdownTransform(markdownTransform.transform(512f, 0f, 0f, 0f, 1.1f))
+                    }
+                    ContextRailButton(Icons.Default.Remove, "字小", "减小文档字号", "draw-md-smaller", LayerBorderStyle.Dashed) {
+                        onMarkdownTransform(markdownTransform.transform(512f, 0f, 0f, 0f, 0.9f))
+                    }
+                    ContextRailButton(Icons.Default.Undo, "复位", "重置文档位置与字号", "draw-md-reset", LayerBorderStyle.Dashed) {
+                        onMarkdownTransform(MarkdownTransform())
+                    }
+                } else {
+                    MarkdownToggleButton(markdownEditing, onToggleMarkdown)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = { onMarkdownTransform(markdownTransform.transform(512f, 0f, 0f, 0f, 0.9f)) }, modifier = Modifier.weight(1f).testTag("draw-md-smaller")) { Text("字小") }
+                        TextButton(onClick = { onMarkdownTransform(markdownTransform.transform(512f, 0f, 0f, 0f, 1.1f)) }, modifier = Modifier.weight(1f).testTag("draw-md-larger")) { Text("字大") }
+                    }
+                    TextButton(onClick = { onMarkdownTransform(MarkdownTransform()) }, modifier = Modifier.fillMaxWidth().testTag("draw-md-reset")) { Text("重置文档位置与字号") }
                 }
-                TextButton(onClick = { onMarkdownTransform(MarkdownTransform()) }, modifier = Modifier.fillMaxWidth().testTag("draw-md-reset")) { Text("重置文档位置与字号") }
             } else if (tool == DrawTool.BaseImage) {
-                Text("单指移动底图，双指等比缩放。", style = MaterialTheme.typography.bodySmall)
-                TextButton(onClick = onResetBase, modifier = Modifier.fillMaxWidth()) { Text("重置底图位置") }
+                if (keyLocked) {
+                    ContextRailButton(Icons.Default.Undo, "复位", "重置底图位置", "draw-base-reset", LayerBorderStyle.Double, onClick = onResetBase)
+                } else {
+                    Text("单指移动底图，双指等比缩放。", style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = onResetBase, modifier = Modifier.fillMaxWidth().testTag("draw-base-reset")) { Text("重置底图位置") }
+                }
+            } else if (keyLocked) {
+                ContextRailButton(Icons.Default.Palette, "颜色", "自定义画笔颜色", "draw-custom-color", tint = penColor) { showCustomColorDialog = true }
+                ContextRailButton(Icons.Default.Add, "加粗", "增大笔刷", "draw-brush-larger") { onWidthChange((penWidth + 1f).coerceAtMost(24f)) }
+                Text("${penWidth.roundToInt()} px", style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                ContextRailButton(Icons.Default.Remove, "变细", "减小笔刷", "draw-brush-smaller") { onWidthChange((penWidth - 1f).coerceAtLeast(2f)) }
             } else {
-            PenColorChoices(
-                penColor = penColor,
-                onColorChange = onColorChange,
-                onOpenCustomColor = { showCustomColorDialog = true },
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("${penWidth.roundToInt()} px", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(36.dp))
-                Slider(
-                    value = penWidth,
-                    onValueChange = onWidthChange,
-                    valueRange = 2f..24f,
-                    modifier = Modifier.weight(1f).semantics { contentDescription = "笔刷大小" },
-                )
-            }
+                PenColorChoices(penColor, onColorChange, { showCustomColorDialog = true })
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("${penWidth.roundToInt()} px", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(36.dp))
+                    Slider(value = penWidth, onValueChange = onWidthChange, valueRange = 2f..24f,
+                        modifier = Modifier.weight(1f).semantics { contentDescription = "笔刷大小" })
+                }
             }
         }
-        Text(
-            text = status,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            minLines = 1,
-            maxLines = 3,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth().testTag("draw-status"),
+        if (!keyLocked) Text(
+            text = status, style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant, minLines = 1, maxLines = 3,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().testTag("draw-status"),
         )
         Button(
-            onClick = onSave,
-            enabled = !isSaving,
-            shape = RoundedCornerShape(8.dp),
+            onClick = onSave, enabled = !isSaving, shape = RoundedCornerShape(8.dp),
+            contentPadding = if (keyLocked) PaddingValues(0.dp) else PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("save-card"),
         ) {
-            Icon(Icons.Default.Save, contentDescription = null)
-            Spacer(Modifier.width(6.dp))
-            Text(if (isSaving) "正在保存" else "保存", maxLines = 1)
+            if (keyLocked) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Default.Save, contentDescription = "保存卡片", modifier = Modifier.size(20.dp))
+                    Text("保存", fontSize = 10.sp, lineHeight = 13.sp, maxLines = 1)
+                }
+            } else {
+                Icon(Icons.Default.Save, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text(if (isSaving) "正在保存" else "保存", maxLines = 1)
+            }
         }
     }
-    if (showCustomColorDialog) {
-        CustomPenColorDialog(
-            initialColor = penColor,
-            onDismiss = { showCustomColorDialog = false },
-            onConfirm = {
-                onColorChange(it)
-                showCustomColorDialog = false
-            },
-        )
+    if (showCustomColorDialog) CustomPenColorDialog(
+        initialColor = penColor, onDismiss = { showCustomColorDialog = false },
+        onConfirm = { onColorChange(it); showCustomColorDialog = false },
+    )
+}
+
+@Composable
+private fun ContextRailButton(
+    icon: ImageVector, label: String, description: String, tag: String,
+    style: LayerBorderStyle = LayerBorderStyle.Solid,
+    tint: Color = MaterialTheme.colorScheme.primary,
+    onClick: () -> Unit,
+) {
+    Column(
+        Modifier.size(48.dp).testTag(tag).clip(RoundedCornerShape(7.dp))
+            .layerBorder(style, MaterialTheme.colorScheme.outlineVariant)
+            .clickable(onClick = onClick).semantics { contentDescription = description },
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
+        Text(label, fontSize = 10.sp, lineHeight = 13.sp, maxLines = 1)
     }
 }
 

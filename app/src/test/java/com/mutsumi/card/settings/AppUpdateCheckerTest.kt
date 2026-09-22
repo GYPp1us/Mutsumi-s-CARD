@@ -20,6 +20,22 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class AppUpdateCheckerTest {
     @Test
+    fun `按设备架构优先级选择小包并兼容旧版通用包`() {
+        val assets = Json.parseToJsonElement("""[
+            {"name":"mutsumi-card-release.apk","browser_download_url":"https://example.test/universal.apk"},
+            {"name":"mutsumi-card-armeabi-v7a-release.apk","browser_download_url":"https://example.test/arm32.apk"},
+            {"name":"mutsumi-card-arm64-v8a-release.apk","browser_download_url":"https://example.test/arm64.apk"},
+            {"name":"mutsumi-card-x86_64-release.apk","browser_download_url":"https://example.test/x64.apk"}
+        ]""").jsonArray
+        assertThat(releaseApkUrlFromAssets(assets, listOf("arm64-v8a", "armeabi-v7a"))).isEqualTo("https://example.test/arm64.apk")
+        assertThat(releaseApkUrlFromAssets(assets, listOf("armeabi-v7a"))).isEqualTo("https://example.test/arm32.apk")
+        assertThat(releaseApkUrlFromAssets(assets, listOf("x86_64", "x86"))).isEqualTo("https://example.test/x64.apk")
+        assertThat(releaseApkUrlFromAssets(assets, listOf("unknown"))).isEqualTo("https://example.test/universal.apk")
+        assertThat(releaseApkUrlFromAssets(kotlinx.serialization.json.JsonArray(assets.take(1)), listOf("arm64-v8a"))).isEqualTo("https://example.test/universal.apk")
+        assertThat(releaseApkUrlFromAssets(kotlinx.serialization.json.JsonArray(assets.drop(1)), listOf("unknown"))).isNull()
+    }
+
+    @Test
     fun `稳定版与预发布版本按语义版本比较`() {
         assertThat(isRemoteVersionNewer("v0.6.7", "0.6.6")).isTrue()
         assertThat(isRemoteVersionNewer("0.6.6", "v0.6.6-rc.1")).isTrue()

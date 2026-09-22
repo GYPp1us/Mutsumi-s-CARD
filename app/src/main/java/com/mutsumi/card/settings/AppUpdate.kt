@@ -1,6 +1,7 @@
 package com.mutsumi.card.settings
 
 import android.content.Context
+import android.os.Build
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -120,7 +121,7 @@ class GitHubReleaseUpdateSource(
             val releasePageUrl = root["html_url"]?.jsonPrimitive?.content?.trim()
                 ?.takeIf { it.isNotEmpty() }
                 ?: "https://github.com/$repository/releases/tag/$versionName"
-            val apkUrl = releaseApkUrlFromAssets(root["assets"]?.jsonArray)
+            val apkUrl = releaseApkUrlFromAssets(root["assets"]?.jsonArray, Build.SUPPORTED_ABIS.toList())
                 ?: throw IOException("更新检查失败：发布未包含 $RELEASE_APK_ASSET_NAME")
             AvailableUpdate(
                 versionName = versionName,
@@ -134,13 +135,17 @@ class GitHubReleaseUpdateSource(
 
 internal const val RELEASE_APK_ASSET_NAME = "mutsumi-card-release.apk"
 
-/** 只接受发布流水线承诺的正式 APK，避免误下载额外上传的调试或测试包。 */
-internal fun releaseApkUrlFromAssets(assets: JsonArray?): String? = assets.orEmpty()
-    .asSequence()
-    .mapNotNull { it as? JsonObject }
-    .firstOrNull { asset -> asset["name"]?.jsonPrimitive?.content == RELEASE_APK_ASSET_NAME }
-    ?.get("browser_download_url")?.jsonPrimitive?.content?.trim()
-    ?.takeIf { it.startsWith("https://", ignoreCase = true) }
+/** 优先采用设备支持的小包；旧发布和旧更新器仍使用固定名称的通用包。 */
+internal fun releaseApkUrlFromAssets(assets: JsonArray?, supportedAbis: List<String> = emptyList()): String? {
+    val supported = setOf("arm64-v8a", "armeabi-v7a", "x86_64")
+    val names = supportedAbis.filter { it in supported }.map { "mutsumi-card-$it-release.apk" } + RELEASE_APK_ASSET_NAME
+    val candidates = assets.orEmpty().filterIsInstance<JsonObject>()
+    return names.firstNotNullOfOrNull { name ->
+        candidates.firstOrNull { it["name"]?.jsonPrimitive?.content == name }
+            ?.get("browser_download_url")?.jsonPrimitive?.content?.trim()
+            ?.takeIf { it.startsWith("https://", ignoreCase = true) }
+    }
+}
 
 class AppUpdateChecker(
     private val source: ReleaseUpdateSource,

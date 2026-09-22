@@ -47,6 +47,9 @@ jobs:
             native/md2svg-jni/target
           key: ${{ runner.os }}-md2svg-${{ hashFiles('native/md2svg-jni/Cargo.lock') }}
 
+      - name: 验证资源去重与发布脚本
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+
       - name: 验证 Rust SDK 集成
         env:
           CARGO_BUILD_JOBS: 2

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "发布标签，例如 v0.8.0"
+        description: "发布标签，例如 v0.8.1"
         required: true
         type: string
 
@@ -90,39 +90,32 @@ jobs:
           MUTSUMI_RELEASE_STORE_PASSWORD: ${{ secrets.MUTSUMI_RELEASE_STORE_PASSWORD }}
           MUTSUMI_RELEASE_KEY_ALIAS: ${{ secrets.MUTSUMI_RELEASE_KEY_ALIAS }}
           MUTSUMI_RELEASE_KEY_PASSWORD: ${{ secrets.MUTSUMI_RELEASE_KEY_PASSWORD }}
-        run: bash gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebugAndroidTest :app:assembleRelease
-
-      - name: 验证各架构原生库完整性
-        run: python3 scripts/verify_native_libraries.py app/build/outputs/apk/release/app-release.apk
-
-      - name: 验证 APK 签名和历史证书
         run: |
-          APK=app/build/outputs/apk/release/app-release.apk
-          $ANDROID_HOME/build-tools/36.0.0/apksigner verify --verbose --print-certs "$APK"
-          ACTUAL=$($ANDROID_HOME/build-tools/36.0.0/apksigner verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr '[:upper:]' '[:lower:]')
-          EXPECTED=$(tr -d '[:space:]' < release-signing-cert.sha256 | tr '[:upper:]' '[:lower:]')
-          test "$ACTUAL" = "$EXPECTED"
+          bash gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebugAndroidTest :app:assembleDebug
+          bash gradlew --no-daemon -PsplitApks=true :app:assembleRelease
 
-      - name: 准备发布文件
+      - name: 验证各架构、版本、压缩及历史签名并准备发布
+        env:
+          RELEASE_VERSION: ${{ steps.release_tag.outputs.tag }}
         run: |
-          mkdir -p release
-          cp app/build/outputs/apk/release/app-release.apk release/mutsumi-card-release.apk
-          sha256sum release/mutsumi-card-release.apk > release/mutsumi-card-release.apk.sha256
+          python3 scripts/prepare_release.py
 
       - name: 发布 GitHub Release
         uses: softprops/action-gh-release@v3.0.1
         with:
           tag_name: ${{ steps.release_tag.outputs.tag }}
           name: 记忆卡片 ${{ steps.release_tag.outputs.tag }}
+          draft: true
           files: |
-            release/mutsumi-card-release.apk
-            release/mutsumi-card-release.apk.sha256
+            release/*.apk
+            release/*.sha256
+            release/包体报告.md
           body: |
             ## Mutsumi's CARD ${{ steps.release_tag.outputs.tag }}
 
-            - Markdown 改用 md2svg Rust SDK，支持中文、公式、表格和 Mermaid。
-            - 文档可单指移动、双指调整字号；预览与保存共用同一渲染。
-            - 重排双面绘图界面，单实线、虚线、双线分别标识绘制、文档与底图。
-            - 已通过单元测试、Lint、AndroidTest APK 编译与 Release 构建。
-            - `mutsumi-card-release.apk` 的 signer SHA-256 已精确匹配历史发布证书。
-            - 下载 APK 后请按 Android 系统提示确认安装；Obtainium 可追踪此 Release。
+            - 锁定文字 key 后，右侧属性栏平滑收成竖向工具轨，空间均分给两个卡面；解锁保留全部内容。
+            - 按 arm64-v8a、armeabi-v7a、x86_64 分发独立安装包，新版更新器优先选择匹配设备的包。
+            - 开启未使用代码与资源裁剪、原生库压缩，并复用重复许可证原文。
+            - 大多数新手机请选择 `mutsumi-card-arm64-v8a-release.apk`；旧款 32 位 ARM 设备选 `armeabi-v7a`，模拟器或 Intel 设备选 `x86_64`。
+            - `mutsumi-card-release.apk` 为兼容旧更新器和 Obtainium 的通用包，各包均使用同一历史签名并包含 SHA-256 附件。
+            - 各安装包的实际大小见附件“包体报告.md”。

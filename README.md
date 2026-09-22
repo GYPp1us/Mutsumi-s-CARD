@@ -2,7 +2,7 @@
 
 Mutsumi's CARD 是一个原生 Android 记忆卡片工具。卡片保留 `key` 文字机制，学习内容以图片为主；录入时可以使用触控笔绘制，也可以使用双面 Markdown 生成图片卡片。
 
-当前版本：`v0.8.0`；正式发布记录见 GitHub Releases。
+当前版本：`v0.8.1`；正式发布记录见 GitHub Releases。
 
 ## 产品能力
 
@@ -38,7 +38,7 @@ rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-and
 cargo install cargo-ndk --version 4.1.2 --locked
 ```
 
-Gradle 自动编译 JNI 和宿主单测库，SDK 提交及依赖由 Cargo.lock 固定。仅在本地调试模拟器时可传 `-Pmd2svgAbis=x86_64`；正式发布包含 arm64-v8a、armeabi-v7a、x86_64。可用 `ANDROID_NDK_HOME` 指定已解压的相同版本 NDK。
+Gradle 自动编译 JNI 和宿主单测库，SDK 提交及依赖由 Cargo.lock 固定。仅在本地调试模拟器时可传 `-Pmd2svgAbis=x86_64`；正式发布通过 `-PsplitApks=true` 同时生成 arm64-v8a、armeabi-v7a、x86_64 独立包和通用包。可用 `ANDROID_NDK_HOME` 指定已解压的相同版本 NDK。
 
 优先使用仓库内 Gradle Wrapper：
 
@@ -77,9 +77,10 @@ adb -s <设备序列号> shell monkey -p com.mutsumi.card 1
 
 1. 使用 Java 17、Android SDK 36 和仓库 Gradle Wrapper。
 2. 使用 GitHub Secrets 写入 Release keystore。
-3. 运行单元测试、Lint、AndroidTest APK 编译，并构建 `app-release.apk`。
+3. 运行单元测试、Lint、AndroidTest APK 编译，并以 `-PsplitApks=true` 构建三个架构包与通用包。
 4. 使用 `apksigner` 精确验证 APK signer SHA-256 与历史证书一致。
-5. 发布 `mutsumi-card-release.apk` 和对应的 `.sha256` 文件。
+5. 逐一验证架构、原生库压缩、版本号和历史签名，上传四个 APK、各自的 `.sha256` 和包体报告到 Release 草稿。
+6. 完成正式包覆盖安装与实际渲染验收后公开 Release。
 
 Release 必须保持 applicationId `com.mutsumi.card`，并使用历史签名证书，否则 Android 增量更新会失败。签名只允许通过 GitHub Secrets 注入，不得提交 keystore、密码或 API Key。
 
@@ -91,7 +92,17 @@ Obtainium 配置 GitHub 仓库：
 https://github.com/GYPp1us/Mutsumi-s-CARD
 ```
 
-选择 Release APK 资产 `mutsumi-card-release.apk`，即可自动检查新版本。
+默认资产 `mutsumi-card-release.apk` 保留三个架构，兼容旧更新器。
+
+若希望减少下载量，Obtainium 的 APK 资产过滤可设置为设备对应的精确文件名：
+
+- 大多数新手机：`mutsumi-card-arm64-v8a-release.apk`。
+- 32 位 ARM 设备：`mutsumi-card-armeabi-v7a-release.apk`。
+- 64 位 Intel 设备/模拟器：`mutsumi-card-x86_64-release.apk`。
+
+0.8.1 起，应用内更新器按设备架构优先级选择小包，无匹配时回退通用包。各包使用相同的版本号、应用 ID 和签名。
+
+发布版启用 R8 代码/资源裁剪及原生库 ZIP 压缩；原生库在安装时解压，因此下载体积下降不代表安装占用等比例下降。SDK 的中文、公式字体仍保持完整并在渲染器之间共享。Rust 许可证按完整原文 SHA-256 复用，保留每个依赖的来源、许可证文件名与原文引用。
 
 ## 数据与安全
 

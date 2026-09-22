@@ -4,6 +4,7 @@ import android.content.pm.ActivityInfo
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -108,6 +109,7 @@ class LandscapeDrawFlowTest {
 
         compose.onNodeWithTag("draw-key-input").performClick().performTextInput("横屏双面测试")
         compose.onNodeWithTag("draw-key-input").performImeAction()
+        compose.onNodeWithTag("draw-key-lock").performClick()
         compose.onNodeWithTag("save-card").performClick()
         waitUntilNodeExists("study-card")
         compose.onNodeWithTag("study-card").performTouchInput { swipeRight() }
@@ -151,6 +153,35 @@ class LandscapeDrawFlowTest {
         waitUntilNodeExists("drawing-canvas-front")
         compose.onNodeWithTag("drawing-canvas-front").assertIsDisplayed()
         compose.onNodeWithTag("save-card").assertIsDisplayed()
+    }
+
+    @Test
+    fun 锁定收起属性栏并均分空间且解锁保留内容() {
+        openLandscapeDrawEditor()
+        compose.onNodeWithTag("draw-key-input").performTextInput("保留这个 key")
+        compose.onNodeWithTag("draw-key-input").performImeAction()
+        hideSoftwareKeyboard()
+        val front = compose.onNodeWithTag("draw-face-front")
+        val back = compose.onNodeWithTag("draw-face-back")
+        val frontBefore = front.fetchSemanticsNode().boundsInRoot.width
+        val backBefore = back.fetchSemanticsNode().boundsInRoot.width
+        compose.onNodeWithTag("draw-key-lock").performClick()
+        compose.waitForIdle()
+        compose.onAllNodesWithTag("draw-key-input").assertCountEquals(0)
+        assertTrue(front.fetchSemanticsNode().boundsInRoot.width > frontBefore + 20f)
+        assertTrue(back.fetchSemanticsNode().boundsInRoot.width > backBefore + 20f)
+        compose.onNodeWithTag("save-card").assertIsDisplayed()
+        compose.onNodeWithContentDescription("解锁文字 key").assertIsDisplayed()
+        compose.onNodeWithTag("draw-tool-markdown").performClick()
+        compose.onNodeWithTag("draw-markdown-front").performTextInput("# 保留文档")
+        hideSoftwareKeyboard()
+        compose.onNodeWithTag("draw-toggle-markdown").performScrollTo().performClick()
+        compose.onNodeWithTag("draw-md-larger").performScrollTo().performClick()
+        assertTrue(compose.onNodeWithTag("drawing-canvas-front").fetchSemanticsNode().config[DrawMarkdownWidthKey] < 256)
+        compose.onNodeWithContentDescription("解锁文字 key").performClick()
+        compose.onNodeWithTag("draw-key-input").assertTextContains("保留这个 key")
+        compose.onNodeWithTag("draw-toggle-markdown").performScrollTo().performClick()
+        compose.onNodeWithTag("draw-markdown-front").assertTextContains("# 保留文档")
     }
 
     @Test

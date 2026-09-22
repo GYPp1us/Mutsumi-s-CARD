@@ -39,14 +39,22 @@ class DrawingVisualAuditTest {
         }
         compose.onNodeWithTag("save-card").assertIsDisplayed()
         capture("文档")
+        compose.onNodeWithTag("draw-key-lock").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("save-card").assertIsDisplayed()
+        capture("锁定文档")
         compose.onNodeWithTag("draw-tool-base").performClick()
         compose.onNodeWithTag("save-card").assertIsDisplayed()
         capture("底图")
+        compose.onNodeWithTag("draw-tool-pen").performClick()
+        capture("锁定绘制")
     }
 
     private fun capture(name: String) {
         compose.waitForIdle()
         val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.waitForIdleSync()
+        android.os.SystemClock.sleep(350) // 等待 Surface 提交最后一帧动画后再截取屏幕。
         val bitmap = instrumentation.uiAutomation.takeScreenshot()
         val directory = requireNotNull(instrumentation.targetContext.getExternalFilesDir("ui-audit"))
         val prefix = InstrumentationRegistry.getArguments().getString("auditName", "默认")

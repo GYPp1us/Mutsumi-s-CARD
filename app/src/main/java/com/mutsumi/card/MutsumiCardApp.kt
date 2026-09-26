@@ -3,6 +3,7 @@ package com.mutsumi.card
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -14,6 +15,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.SavedStateHandle
@@ -51,6 +55,23 @@ import java.io.File
 @Composable
 fun MutsumiCardApp(appContainer: AppContainer) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val focusReporter = appContainer.focusReporter
+    DisposableEffect(lifecycleOwner, focusReporter) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> focusReporter?.setForeground(true)
+                Lifecycle.Event.ON_STOP -> focusReporter?.setForeground(false)
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        focusReporter?.setForeground(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+        onDispose {
+            focusReporter?.setForeground(false)
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
     var selectedName by rememberSaveable { mutableStateOf(AppDestination.Study.name) }
     val selected = AppDestination.valueOf(selectedName)
     var selectedDeckId by rememberSaveable { mutableLongStateOf(0L) }
@@ -193,6 +214,7 @@ fun MutsumiCardApp(appContainer: AppContainer) {
                 AppDestination.Settings -> AiSettingsScreen(
                     store = requireNotNull(appContainer.aiSettingsStore),
                     appUpdateViewModel = appUpdateViewModel,
+                    focusReporter = focusReporter,
                     feedback = feedback,
                 )
             }
@@ -203,9 +225,16 @@ fun MutsumiCardApp(appContainer: AppContainer) {
 @Composable
 private fun StudyDestination(appContainer: AppContainer, deckId: Long, feedback: FeedbackController) {
     val scope = rememberCoroutineScope()
+    val focusReporter = appContainer.focusReporter
+    DisposableEffect(focusReporter) {
+        onDispose { focusReporter?.setStudying(false) }
+    }
     val cards by remember(deckId) {
         if (deckId > 0) appContainer.cardRepository.cards(deckId) else kotlinx.coroutines.flow.flowOf(emptyList())
     }.collectAsState(initial = emptyList())
+    LaunchedEffect(focusReporter, cards.isNotEmpty()) {
+        focusReporter?.setStudying(cards.isNotEmpty())
+    }
     var currentId by rememberSaveable(deckId) { mutableStateOf<Long?>(null) }
     LaunchedEffect(cards) { if (cards.none { it.id == currentId }) currentId = cards.firstOrNull()?.id }
     val legacyCards = cards.map {

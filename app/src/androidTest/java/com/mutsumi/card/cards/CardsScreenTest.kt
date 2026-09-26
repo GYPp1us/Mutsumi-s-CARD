@@ -82,13 +82,14 @@ class CardsScreenTest {
     fun publicContextPaneEditsKeyAndConfirmsDelete() {
         var edited = ""
         var deleted = false
+        var revision by mutableStateOf(0L)
         compose.setContent {
             MaterialTheme {
                 CardsContextPane(
                     card = card(),
                     imageContent = testImage,
-                    onSaveKey = { edited = it },
-                    keySaveRevision = 0,
+                    onSaveKey = { edited = it; revision += 1 },
+                    keySaveRevision = revision,
                     isBusy = false,
                     compactHeight = false,
                     onRedraw = {},
@@ -103,6 +104,7 @@ class CardsScreenTest {
         compose.onNodeWithText("保存").performClick()
         assertEquals("细胞膜", edited)
 
+        compose.waitForIdle()
         compose.onNodeWithContentDescription("删除卡片").performClick()
         assertFalse(deleted)
         compose.onNodeWithText("确认删除").performClick()

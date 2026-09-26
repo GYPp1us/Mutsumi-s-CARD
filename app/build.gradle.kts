@@ -71,7 +71,12 @@ android {
         }
     }
     // 下载包压缩原生库；安装时由 Android 解压，字体和排版功能保持完整。
-    packaging { jniLibs { useLegacyPackaging = true } }
+    packaging { jniLibs {
+        useLegacyPackaging = true
+        // 依赖中携带 x86 原生库，但 Markdown SDK 只构建下列三个 ABI。
+        // 通用包必须排除 x86，否则 32 位 x86 设备会选中缺少渲染器的架构。
+        excludes += "**/x86/*.so"
+    } }
 
     buildFeatures {
         compose = true

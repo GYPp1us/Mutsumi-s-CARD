@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "发布标签，例如 v0.8.1"
+        description: "发布标签，例如 v0.8.2"
         required: true
         type: string
 
@@ -113,6 +113,10 @@ jobs:
           body: |
             ## Mutsumi's CARD ${{ steps.release_tag.outputs.tag }}
 
+            - 在设置中输入 408 Dashboard 目录链接或密钥，读取科目与事项的实际 ID，并选择所需事项。
+            - 仅在前台学习且有卡片时，以固定来源 `mutsumi_card` 每 20 秒上报一次；离开或进入后台立即发送 idle。
+            - 密钥在设备 Keystore 加密并放入不参与备份的私有目录，不包含在 APK、仓库、日志和截图中。
+            - 409 表示另一处专注正在进行或当日已结算，应用会暂停心跳，待用户重新启用。
             - 锁定文字 key 后，右侧属性栏平滑收成竖向工具轨，空间均分给两个卡面；解锁保留全部内容。
             - 按 arm64-v8a、armeabi-v7a、x86_64 分发独立安装包，新版更新器优先选择匹配设备的包。
             - 开启未使用代码与资源裁剪、原生库压缩，并复用重复许可证原文。

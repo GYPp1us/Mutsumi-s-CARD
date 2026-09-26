@@ -28,8 +28,8 @@ android {
         applicationId = "com.mutsumi.card"
         minSdk = 26
         targetSdk = 36
-        versionCode = 28
-        versionName = "0.8.1"
+        versionCode = 29
+        versionName = "0.8.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         if (!splitApks.get()) ndk {
             abiFilters += providers.gradleProperty("md2svgAbis")

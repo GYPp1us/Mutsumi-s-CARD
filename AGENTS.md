@@ -7,9 +7,9 @@
 
 ## 当前目标
 
-- 当前开发目标是锁定 key 后收起属性栏、压缩并拆分安装包，发布 `v0.8.1`。
-- 当前开发分支：`codex/v0.8.1-compact-release`。
-- 当前隔离工作区：`.worktrees/v0.8.1-compact-release`。
+- 当前开发目标是接入 408 Dashboard 专注上报并发布 `v0.8.2`。
+- 当前开发分支：`codex/v0.8.2-focus-reporter`。
+- 当前隔离工作区：`.worktrees/v0.8.2-focus-reporter`。
 - 不要在主工作区的 `main` 上直接实现重构。
 - 必须持续推进至 GitHub Release 包含已签名 APK；中间阶段完成不等于目标完成。
 

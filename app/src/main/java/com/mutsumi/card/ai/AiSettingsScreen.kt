@@ -31,6 +31,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.mutsumi.card.focus.FocusReporterController
+import com.mutsumi.card.focus.FocusSettingsSection
 import com.mutsumi.card.settings.AppUpdateSettingsSection
 import com.mutsumi.card.settings.AppUpdateViewModel
 import com.mutsumi.card.ui.components.FeedbackController
@@ -41,6 +43,7 @@ import kotlinx.coroutines.launch
 fun AiSettingsScreen(
     store: AiSettingsStore,
     appUpdateViewModel: AppUpdateViewModel,
+    focusReporter: FocusReporterController? = null,
     feedback: FeedbackController,
     modifier: Modifier = Modifier,
 ) {
@@ -165,6 +168,7 @@ fun AiSettingsScreen(
             )
         }
         if (message.isNotBlank()) Text(message)
+        focusReporter?.let { FocusSettingsSection(it, feedback) }
         AppUpdateSettingsSection(appUpdateViewModel, feedback)
     }
 }

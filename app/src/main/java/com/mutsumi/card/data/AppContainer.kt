@@ -17,6 +17,12 @@ import com.mutsumi.card.data.preferences.AppPreferences
 import com.mutsumi.card.data.preferences.DataStoreAppPreferences
 import com.mutsumi.card.ai.AiSettingsStore
 import com.mutsumi.card.BuildConfig
+import com.mutsumi.card.focus.AndroidFocusSettingsStorage
+import com.mutsumi.card.focus.FocusReporterController
+import com.mutsumi.card.focus.HttpFocusReporterGateway
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import com.mutsumi.card.settings.AppUpdateChecker
 import com.mutsumi.card.settings.AppUpdateSettingsStore
 import com.mutsumi.card.settings.DataStoreAppUpdateSettingsStore
@@ -34,6 +40,7 @@ class AppContainer(
     val aiSettingsStore: AiSettingsStore? = null,
     val appUpdateSettingsStore: AppUpdateSettingsStore? = null,
     val appUpdateChecker: AppUpdateChecker? = null,
+    val focusReporter: FocusReporterController? = null,
 ) {
     suspend fun initializeDefaultSeed(context: Context) {
         DefaultSeedInitializer(context, cardRepository).initialize()
@@ -67,6 +74,10 @@ class AppContainer(
             )
             return AppContainer(
                 cardRepository = repository,
+                focusReporter = FocusReporterController(
+                    AndroidFocusSettingsStorage(context), HttpFocusReporterGateway(),
+                    CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+                ),
                 appPreferences = DataStoreAppPreferences.create(context),
                 imageStore = imageStore,
                 backupOperations = repositoryBackupOperations,

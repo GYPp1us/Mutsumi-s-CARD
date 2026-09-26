@@ -493,7 +493,7 @@ fun CardsContextPane(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (!imeVisible) {
+            if (!imeVisible || !editing) {
                 item {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text("卡片详情", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))

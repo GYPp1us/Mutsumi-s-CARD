@@ -4,6 +4,7 @@ import android.content.pm.ActivityInfo
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -153,6 +154,35 @@ class LandscapeDrawFlowTest {
         waitUntilNodeExists("drawing-canvas-front")
         compose.onNodeWithTag("drawing-canvas-front").assertIsDisplayed()
         compose.onNodeWithTag("save-card").assertIsDisplayed()
+    }
+
+    @Test
+    fun 收起后六色纵向直接选择且解锁保留选中色() {
+        openLandscapeDrawEditor()
+        compose.onNodeWithTag("draw-key-lock").performClick()
+        compose.waitForIdle()
+        val colors = listOf("墨绿", "珊瑚红", "蓝灰", "金黄", "紫色", "墨黑")
+        var previousY = Float.NEGATIVE_INFINITY
+        var centerX: Float? = null
+        colors.forEach { color ->
+            val swatch = compose.onNodeWithContentDescription("使用$color")
+            swatch.performScrollTo().assertIsDisplayed()
+            val bounds = swatch.fetchSemanticsNode().boundsInRoot
+            centerX?.let { assertTrue("收起后的色块应排在同一列", kotlin.math.abs(bounds.center.x - it) < 1f) }
+            centerX = bounds.center.x
+            // ScrollTo 会移动整个颜色列，因此按内容坐标比较顺序。
+            val panel = compose.onNodeWithTag("draw-color-choices").fetchSemanticsNode()
+            val y = swatch.fetchSemanticsNode().positionInRoot.y - panel.positionInRoot.y
+            assertTrue("六个色块应按纵向顺序展开", y > previousY)
+            previousY = y
+            swatch.performClick().assertIsSelected()
+        }
+        compose.onNodeWithTag("draw-custom-color").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("save-card").assertIsDisplayed()
+        compose.onNodeWithContentDescription("解锁文字 key").performClick()
+        compose.waitForIdle()
+        colors.forEach { compose.onNodeWithContentDescription("使用$it").performScrollTo().assertIsDisplayed() }
+        compose.onNodeWithContentDescription("使用墨黑").assertIsSelected()
     }
 
     @Test

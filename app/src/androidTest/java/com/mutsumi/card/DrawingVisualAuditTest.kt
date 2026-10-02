@@ -5,7 +5,9 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -48,6 +50,9 @@ class DrawingVisualAuditTest {
         capture("底图")
         compose.onNodeWithTag("draw-tool-pen").performClick()
         capture("锁定绘制")
+        compose.onNodeWithContentDescription("使用墨黑").performScrollTo().performClick()
+        compose.onNodeWithTag("save-card").assertIsDisplayed()
+        capture("锁定六色底部")
     }
 
     private fun capture(name: String) {

@@ -43,7 +43,7 @@ def prepare():
         if size >= BASELINE:
             raise ValueError(f"包体未缩小：{name}")
         report.append(f"| {name} | {size:,} | {size / 1024**2:.2f} | {1 - size / BASELINE:.1%} |")
-    (destination / "包体报告.md").write_text("\n".join(report) + "\n", encoding="utf-8")
+    (destination / "apk-size-report.md").write_text("\n".join(report) + "\n", encoding="utf-8")
     print("\n".join(report))
 
 if __name__ == "__main__":

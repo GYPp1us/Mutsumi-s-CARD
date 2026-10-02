@@ -112,6 +112,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsPropertyKey
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -693,7 +694,7 @@ private fun EditorContextPanel(
                     TextButton(onClick = onResetBase, modifier = Modifier.fillMaxWidth().testTag("draw-base-reset")) { Text("重置底图位置") }
                 }
             } else if (keyLocked) {
-                ContextRailButton(Icons.Default.Palette, "颜色", "自定义画笔颜色", "draw-custom-color", tint = penColor) { showCustomColorDialog = true }
+                PenColorChoices(penColor, onColorChange, { showCustomColorDialog = true }, vertical = true)
                 ContextRailButton(Icons.Default.Add, "加粗", "增大笔刷", "draw-brush-larger") { onWidthChange((penWidth + 1f).coerceAtMost(24f)) }
                 Text("${penWidth.roundToInt()} px", style = MaterialTheme.typography.labelSmall, maxLines = 1)
                 ContextRailButton(Icons.Default.Remove, "变细", "减小笔刷", "draw-brush-smaller") { onWidthChange((penWidth - 1f).coerceAtLeast(2f)) }
@@ -804,20 +805,32 @@ private fun PenColorChoices(
     onColorChange: (Color) -> Unit,
     onOpenCustomColor: () -> Unit,
     modifier: Modifier = Modifier,
+    vertical: Boolean = false,
 ) {
     val presets = listOf(
         "墨绿" to Color(0xFF16352E),
         "珊瑚红" to Color(0xFFC65F4C),
         "蓝灰" to Color(0xFF496F83),
+        "金黄" to Color(0xFFE2B94F),
+        "紫色" to Color(0xFF805AA3),
+        "墨黑" to Color(0xFF202623),
     )
-    Row(horizontalArrangement = Arrangement.spacedBy(2.dp), modifier = modifier.fillMaxWidth()) {
-        presets.forEach { (label, color) ->
-            ColorSwatch(
-                color = color,
-                label = "使用$label",
-                selected = penColor == color,
-                onClick = { onColorChange(color) },
-            )
+    Column(
+        modifier = modifier.fillMaxWidth().testTag("draw-color-choices"),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        presets.chunked(if (vertical) 1 else 3).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                row.forEach { (label, color) ->
+                    ColorSwatch(
+                        color = color,
+                        label = "使用$label",
+                        selected = penColor == color,
+                        onClick = { onColorChange(color) },
+                    )
+                }
+            }
         }
         ToolIconButton(
             icon = Icons.Default.Palette,
@@ -825,7 +838,7 @@ private fun PenColorChoices(
             selected = presets.none { it.second == penColor },
             onClick = onOpenCustomColor,
             modifier = Modifier.testTag("draw-custom-color"),
-            buttonSize = 40.dp,
+            buttonSize = 44.dp,
         )
     }
 }
@@ -841,10 +854,10 @@ private fun ColorSwatch(
     IconButton(
         onClick = onClick,
         modifier = Modifier
-            .size(40.dp)
+            .size(44.dp)
             .clip(shape)
             .border(1.dp, if (selected) MaterialTheme.colorScheme.primary else Color.Transparent, shape)
-            .semantics { contentDescription = label },
+            .semantics { contentDescription = label; this.selected = selected },
     ) {
         Box(modifier = Modifier.size(26.dp).clip(shape).background(color))
     }

@@ -22,6 +22,7 @@ import org.junit.Assert.assertTrue
 import org.junit.rules.ExternalResource
 import org.junit.Rule
 import org.junit.Test
+import android.content.pm.ActivityInfo
 
 class V090WorkflowTest {
     @get:Rule(order = 0) val draftCleanup = object : ExternalResource() {
@@ -37,6 +38,24 @@ class V090WorkflowTest {
         compose.onNodeWithText("知识库分割").assertIsDisplayed()
         compose.onNodeWithText("快速主题录入").performClick()
         compose.onNodeWithTag("ai-quick-topic").assertIsDisplayed()
+    }
+
+    @Test fun 手机快速主题首屏提供完整输入框且补充要求可达() {
+        compose.activity.runOnUiThread { compose.activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT }
+        try {
+            waitFor("app-initialized")
+            compose.onNodeWithTag("nav-aibatch").performClick()
+            compose.onNodeWithText("快速主题录入").performClick()
+            compose.waitForIdle()
+            val field = compose.onNodeWithTag("ai-quick-topic").fetchSemanticsNode().boundsInRoot
+            assertTrue("主题输入框首屏必须完整可见", field.height >= 64f * compose.activity.resources.displayMetrics.density)
+            compose.onNodeWithTag("ai-quick-topic").performTextInput("二叉树")
+            hideKeyboard()
+            compose.onNodeWithTag("ai-quick-instructions").performScrollTo().performTextInput("加入例子")
+            hideKeyboard()
+        } finally {
+            compose.activity.runOnUiThread { compose.activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
+        }
     }
 
     @Test fun 草稿保存只持久化且收起滑块悬浮展开短滑不制作() {

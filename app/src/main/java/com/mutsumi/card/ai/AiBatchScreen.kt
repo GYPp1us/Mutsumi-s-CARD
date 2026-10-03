@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -169,7 +170,7 @@ fun AiBatchScreen(
                 }
                 BoxWithConstraints(modifier = Modifier.weight(1f)) {
                     when {
-                        state.inputMode == AiInputMode.QuickTopic -> QuickTopicLayout(state, viewModel, maxWidth >= 700.dp, WindowInsets.isImeVisible)
+                        state.inputMode == AiInputMode.QuickTopic -> QuickTopicLayout(state, viewModel, maxWidth >= 700.dp, maxHeight < 240.dp, WindowInsets.isImeVisible)
                         maxWidth >= 1_040.dp -> WideWorkflowLayout(state, viewModel, prioritizeManualSource)
                         maxWidth >= 700.dp -> MediumWorkflowLayout(state, viewModel, prioritizeManualSource)
                         else -> CompactWorkflowLayout(state, viewModel)
@@ -212,6 +213,7 @@ fun AiBatchScreen(
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun WorkflowTopBar(
     state: AiBatchUiState,
     onFiles: () -> Unit,
@@ -242,7 +244,7 @@ private fun WorkflowTopBar(
         if (maxWidth < 620.dp) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("AI 录入", style = MaterialTheme.typography.titleLarge)
-                controls()
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { controls() }
                 WorkflowActions(state.isImporting, state.isGenerating, state.isSaving, onFiles, onFolder, onGenerate, state.inputMode == AiInputMode.Knowledge)
                 state.message.takeIf(String::isNotBlank)?.let { WorkflowNotification(it, state.errorMessage != null, onCopyMessage) }
             }
@@ -292,12 +294,15 @@ private fun WorkflowActions(
 }
 
 @Composable
-private fun QuickTopicLayout(state: AiBatchUiState, viewModel: AiBatchViewModel, wide: Boolean, imeVisible: Boolean) {
+private fun QuickTopicLayout(state: AiBatchUiState, viewModel: AiBatchViewModel, wide: Boolean, short: Boolean, imeVisible: Boolean) {
+    var tab by rememberSaveable { mutableIntStateOf(0) }
     val input: @Composable (Modifier) -> Unit = { modifier ->
         WorkflowSurface(modifier.testTag("ai-quick-pane")) {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("输入一个学习主题", style = MaterialTheme.typography.titleMedium)
-                Text("无需准备文件。描述你想掌握的知识，生成后逐张审核候选。", style = MaterialTheme.typography.bodySmall)
+                if (!short) {
+                    Text("输入一个学习主题", style = MaterialTheme.typography.titleMedium)
+                    Text("无需准备文件。描述你想掌握的知识，生成后逐张审核候选。", style = MaterialTheme.typography.bodySmall)
+                }
                 OutlinedTextField(value = state.quickTopic, onValueChange = viewModel::setQuickTopic,
                     label = { Text("学习主题") }, placeholder = { Text("例如：二叉树的遍历与时间复杂度") },
                     enabled = !state.isGenerating && !state.isSaving, minLines = 2, maxLines = 4,
@@ -313,8 +318,12 @@ private fun QuickTopicLayout(state: AiBatchUiState, viewModel: AiBatchViewModel,
         input(Modifier.weight(1f).fillMaxHeight())
         if (!imeVisible) ResultPane(state, viewModel, Modifier.weight(1f).fillMaxHeight())
     } else Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        input(Modifier.weight(1f).fillMaxWidth())
-        if (!imeVisible) ResultPane(state, viewModel, Modifier.weight(1f).fillMaxWidth())
+        if (!imeVisible) TabRow(selectedTabIndex = tab) {
+            Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("主题输入") })
+            Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("候选结果") })
+        }
+        if (tab == 0 || imeVisible) input(Modifier.weight(1f).fillMaxWidth())
+        else ResultPane(state, viewModel, Modifier.weight(1f).fillMaxWidth())
     }
 }
 
@@ -705,7 +714,7 @@ private fun ResultPane(state: AiBatchUiState, viewModel: AiBatchViewModel, modif
         Column(Modifier.fillMaxSize()) {
             PaneTitle(
                 Icons.Outlined.AutoAwesome,
-                "③ 结果预览",
+                if (state.inputMode == AiInputMode.QuickTopic) "候选预览" else "③ 结果预览",
                 "${state.groups.size}/${AiCandidateQueue.MAX_PENDING_GROUPS} 组候选已进入队列",
             )
             HorizontalDivider()
@@ -714,7 +723,7 @@ private fun ResultPane(state: AiBatchUiState, viewModel: AiBatchViewModel, modif
             }
             val group = state.groups.getOrNull(state.groupIndex)
             if (group == null) {
-                EmptyState("等待工作流输出", "运行后，候选卡片会按生成顺序追加到这里。", Modifier.weight(1f))
+                EmptyState("等待候选卡片", "运行后，候选卡片会按生成顺序追加到这里。", Modifier.weight(1f))
             } else {
                 LazyRow(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),

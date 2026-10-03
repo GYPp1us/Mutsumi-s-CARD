@@ -608,11 +608,11 @@ private fun ReviewText(card: MemoryCard) {
 
 @Composable
 private fun DetailActions(isBusy: Boolean, onRedraw: () -> Unit, onArchive: () -> Unit) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        FilledTonalButton(onClick = onRedraw, enabled = !isBusy, modifier = Modifier.weight(1f)) {
-            Icon(Icons.Default.Refresh, null); Spacer(Modifier.width(4.dp)); Text("重新绘制", maxLines = 1)
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        FilledTonalButton(onClick = onRedraw, enabled = !isBusy, modifier = Modifier.fillMaxWidth().testTag("card-edit-as-base")) {
+            Icon(Icons.Default.Refresh, null); Spacer(Modifier.width(4.dp)); Text("以此为底图重新编辑", maxLines = 2)
         }
-        OutlinedButton(onClick = onArchive, enabled = !isBusy, modifier = Modifier.weight(1f)) {
+        OutlinedButton(onClick = onArchive, enabled = !isBusy, modifier = Modifier.fillMaxWidth()) {
             Icon(Icons.Default.Archive, null); Spacer(Modifier.width(4.dp)); Text("归档", maxLines = 1)
         }
     }

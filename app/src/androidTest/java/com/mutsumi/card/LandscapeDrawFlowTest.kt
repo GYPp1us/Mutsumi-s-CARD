@@ -112,6 +112,10 @@ class LandscapeDrawFlowTest {
         compose.onNodeWithTag("draw-key-input").performImeAction()
         compose.onNodeWithTag("draw-key-lock").performClick()
         compose.onNodeWithTag("save-card").performClick()
+        waitUntilNodeExists("complete-card")
+        compose.onNodeWithTag("complete-card").performTouchInput {
+            down(Offset(22f, height / 2f)); moveTo(Offset(width - 8f, height / 2f), 350); up()
+        }
         waitUntilNodeExists("study-card")
         compose.onNodeWithTag("study-card").performTouchInput { swipeRight() }
     }

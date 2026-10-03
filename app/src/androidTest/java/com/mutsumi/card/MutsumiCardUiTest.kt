@@ -1,6 +1,7 @@
 package com.mutsumi.card
 
 import android.graphics.Bitmap
+import android.content.pm.ActivityInfo
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -19,12 +20,30 @@ import androidx.core.view.WindowInsetsCompat
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.junit.Assert.assertTrue
 import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class MutsumiCardUiTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
+
+    @Test
+    fun 手机底部导航避开系统按钮区() {
+        composeRule.activity.runOnUiThread { composeRule.activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT }
+        try {
+            composeRule.waitUntil(12000) { composeRule.onAllNodesWithTag("bottom-navigation").fetchSemanticsNodes().isNotEmpty() }
+            composeRule.waitForIdle()
+            // 使用实际窗口 Insets，而不是仅证明 Compose 可以绕过系统栏注入点击。
+            val bottomInset = androidx.core.view.ViewCompat.getRootWindowInsets(composeRule.activity.window.decorView)!!
+                .getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
+            val rootBottom = composeRule.onNodeWithTag("app-shell").fetchSemanticsNode().boundsInRoot.bottom
+            val buttonBottom = composeRule.onNodeWithTag("nav-aibatch").fetchSemanticsNode().boundsInRoot.bottom
+            assertTrue("底部导航必须位于系统按钮区之上", buttonBottom <= rootBottom - bottomInset + 1f)
+        } finally {
+            composeRule.activity.runOnUiThread { composeRule.activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
+        }
+    }
 
     private fun capture(name: String) = captureDevice(name)
 
@@ -104,6 +123,7 @@ class MutsumiCardUiTest {
         capture("04-draw-key-lock")
 
         composeRule.onNodeWithTag("nav-settings").assertIsDisplayed().performClick()
+        composeRule.onNodeWithTag("settings-group-update").performScrollTo().performClick()
         composeRule.waitUntil(timeoutMillis = 10_000) {
             composeRule.onAllNodesWithTag("app-update-settings").fetchSemanticsNodes().isNotEmpty()
         }

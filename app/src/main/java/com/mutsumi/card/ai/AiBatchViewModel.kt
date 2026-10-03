@@ -72,6 +72,12 @@ class AiBatchViewModel(
         }
     }
 
+    fun setInputMode(mode: AiInputMode) {
+        if (!state.value.isGenerating && !state.value.isImporting && !state.value.isSaving) update { copy(inputMode = mode) }
+    }
+    fun setQuickTopic(value: String) { update { copy(quickTopic = value.take(2000)) } }
+    fun setQuickInstructions(value: String) { update { copy(quickInstructions = value.take(20_000)) } }
+
     fun showMessage(value: String) { update { copy(message = value, errorMessage = null) } }
     fun showError(value: String) { update { copy(message = value, errorMessage = value) } }
     fun setParameters(parameters: AiGenerationParameters) { update { copy(parameters = parameters) } }
@@ -199,9 +205,11 @@ class AiBatchViewModel(
             showError("请先保存当前候选队列后再运行新的工作流")
             return
         }
+        update { copy(isGenerating = true, message = "正在读取 AI 设置", errorMessage = null) }
         viewModelScope.launch {
             try {
-                val contextResult = buildContext(current)
+                val freshSettings = settingsStore.load()
+                val contextResult = buildContext(current.copy(settings = freshSettings))
                 update {
                     copy(
                         isGenerating = true,
@@ -216,7 +224,7 @@ class AiBatchViewModel(
                     )
                 }
                 client.generate(
-                    settings = current.settings,
+                    settings = freshSettings,
                     context = contextResult.text,
                     parameters = current.parameters,
                     onGroup = { rawGroup ->
@@ -398,11 +406,7 @@ class AiBatchViewModel(
         }
     }
 
-    private fun buildContext(state: AiBatchUiState): AiWorkflowContext = AiWorkflowContextComposer.compose(
-        plan = AiWorkflowPlanner.plan(sourcesForWorkflow(state), state.workflow),
-        definition = state.workflow,
-        parameters = state.parameters,
-    )
+    private fun buildContext(state: AiBatchUiState): AiWorkflowContext = AiInputContext.compose(state)
 
     private fun AiRawGroup.toCandidateGroup(): AiCandidateGroup = AiCandidateGroup(
         index = index,

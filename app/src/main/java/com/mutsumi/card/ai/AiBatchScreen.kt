@@ -7,6 +7,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -143,6 +144,13 @@ fun AiBatchScreen(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                TabRow(selectedTabIndex = state.inputMode.ordinal) {
+                    AiInputMode.entries.forEach { mode ->
+                        Tab(selected = state.inputMode == mode,
+                            enabled = !state.isGenerating && !state.isImporting && !state.isSaving,
+                            onClick = { viewModel.setInputMode(mode) }, text = { Text(mode.label) })
+                    }
+                }
                 if (!prioritizeManualSource) {
                     WorkflowTopBar(
                         state = state,
@@ -161,6 +169,7 @@ fun AiBatchScreen(
                 }
                 BoxWithConstraints(modifier = Modifier.weight(1f)) {
                     when {
+                        state.inputMode == AiInputMode.QuickTopic -> QuickTopicLayout(state, viewModel, maxWidth >= 700.dp, WindowInsets.isImeVisible)
                         maxWidth >= 1_040.dp -> WideWorkflowLayout(state, viewModel, prioritizeManualSource)
                         maxWidth >= 700.dp -> MediumWorkflowLayout(state, viewModel, prioritizeManualSource)
                         else -> CompactWorkflowLayout(state, viewModel)
@@ -232,9 +241,9 @@ private fun WorkflowTopBar(
         }
         if (maxWidth < 620.dp) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("AI 批量工作流", style = MaterialTheme.typography.titleLarge)
+                Text("AI 录入", style = MaterialTheme.typography.titleLarge)
                 controls()
-                WorkflowActions(state.isImporting, state.isGenerating, state.isSaving, onFiles, onFolder, onGenerate)
+                WorkflowActions(state.isImporting, state.isGenerating, state.isSaving, onFiles, onFolder, onGenerate, state.inputMode == AiInputMode.Knowledge)
                 state.message.takeIf(String::isNotBlank)?.let { WorkflowNotification(it, state.errorMessage != null, onCopyMessage) }
             }
         } else {
@@ -243,9 +252,9 @@ private fun WorkflowTopBar(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("AI 批量工作流", style = MaterialTheme.typography.titleLarge)
+                Text("AI 录入", style = MaterialTheme.typography.titleLarge)
                 controls()
-                WorkflowActions(state.isImporting, state.isGenerating, state.isSaving, onFiles, onFolder, onGenerate)
+                WorkflowActions(state.isImporting, state.isGenerating, state.isSaving, onFiles, onFolder, onGenerate, state.inputMode == AiInputMode.Knowledge)
                 state.message.takeIf(String::isNotBlank)?.let { WorkflowNotification(it, state.errorMessage != null, onCopyMessage) }
             }
         }
@@ -260,11 +269,14 @@ private fun WorkflowActions(
     onFiles: () -> Unit,
     onFolder: () -> Unit,
     onGenerate: () -> Unit,
+    showSources: Boolean = true,
 ) {
     val isBusy = isImporting || isGenerating || isSaving
     Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = onFiles, enabled = !isBusy) { Icon(Icons.Outlined.UploadFile, contentDescription = "导入文本文件") }
-        IconButton(onClick = onFolder, enabled = !isBusy) { Icon(Icons.Outlined.FolderOpen, contentDescription = "递归导入文件夹") }
+        if (showSources) {
+            IconButton(onClick = onFiles, enabled = !isBusy) { Icon(Icons.Outlined.UploadFile, contentDescription = "导入文本文件") }
+            IconButton(onClick = onFolder, enabled = !isBusy) { Icon(Icons.Outlined.FolderOpen, contentDescription = "递归导入文件夹") }
+        }
         Button(onClick = onGenerate, enabled = !isBusy) {
             Icon(Icons.Outlined.PlayArrow, contentDescription = null)
             Spacer(Modifier.width(6.dp))
@@ -272,10 +284,37 @@ private fun WorkflowActions(
                 when {
                     isImporting -> "读取中"
                     isGenerating -> "生成中"
-                    else -> "运行工作流"
+                    else -> if (showSources) "运行工作流" else "生成主题卡片"
                 },
             )
         }
+    }
+}
+
+@Composable
+private fun QuickTopicLayout(state: AiBatchUiState, viewModel: AiBatchViewModel, wide: Boolean, imeVisible: Boolean) {
+    val input: @Composable (Modifier) -> Unit = { modifier ->
+        WorkflowSurface(modifier.testTag("ai-quick-pane")) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("输入一个学习主题", style = MaterialTheme.typography.titleMedium)
+                Text("无需准备文件。描述你想掌握的知识，生成后逐张审核候选。", style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(value = state.quickTopic, onValueChange = viewModel::setQuickTopic,
+                    label = { Text("学习主题") }, placeholder = { Text("例如：二叉树的遍历与时间复杂度") },
+                    enabled = !state.isGenerating && !state.isSaving, minLines = 2, maxLines = 4,
+                    modifier = Modifier.fillMaxWidth().testTag("ai-quick-topic"))
+                OutlinedTextField(value = state.quickInstructions, onValueChange = viewModel::setQuickInstructions,
+                    label = { Text("补充要求（可选）") }, placeholder = { Text("考试范围、难度、例子或容易混淆的知识点") },
+                    enabled = !state.isGenerating && !state.isSaving, minLines = 3, maxLines = 6,
+                    modifier = Modifier.fillMaxWidth().testTag("ai-quick-instructions"))
+            }
+        }
+    }
+    if (wide) Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        input(Modifier.weight(1f).fillMaxHeight())
+        if (!imeVisible) ResultPane(state, viewModel, Modifier.weight(1f).fillMaxHeight())
+    } else Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        input(Modifier.weight(1f).fillMaxWidth())
+        if (!imeVisible) ResultPane(state, viewModel, Modifier.weight(1f).fillMaxWidth())
     }
 }
 
@@ -581,7 +620,7 @@ private fun WorkflowPane(state: AiBatchUiState, viewModel: AiBatchViewModel, mod
                     "生成任务",
                     "${state.parameters.groupCountRange.label} 组 · 每组 ${state.parameters.candidatesPerGroup} 个候选",
                 ) {
-                    Text("运行后只注册 generate_card_group；候选按 4 秒节流追加到右侧队列。")
+                    Text("按设定的分组与候选数量生成，结果逐组加入候选队列。")
                 }
             }
         }

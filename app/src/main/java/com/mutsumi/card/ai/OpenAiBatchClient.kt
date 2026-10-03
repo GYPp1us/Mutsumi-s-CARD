@@ -131,7 +131,7 @@ class OpenAiBatchClient(
         }
     }
 
-    private fun buildRequest(
+    internal fun buildRequest(
         settings: AiSettings,
         context: String,
         parameters: AiGenerationParameters,
@@ -143,7 +143,7 @@ class OpenAiBatchClient(
                 put("role", "system")
                 put(
                     "content",
-                    "你是记忆卡片编辑助手。只调用 generate_card_group 工具。" +
+                    settings.generationPrompt + "\n只调用 generate_card_group 工具。" +
                         "请生成 ${parameters.groupCountRange.label} 组，每组 ${parameters.candidatesPerGroup} 张中文双面 Markdown 卡片。" +
                         "group_index 从 1 开始连续编号，每组只调用一次；不得输出空字段。",
                 )

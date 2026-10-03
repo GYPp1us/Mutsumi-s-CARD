@@ -70,6 +70,9 @@ data class AiGenerationParameters(
 )
 
 data class AiBatchUiState(
+    val inputMode: AiInputMode = AiInputMode.Knowledge,
+    val quickTopic: String = "",
+    val quickInstructions: String = "",
     val settings: AiSettings = AiSettings(),
     val files: List<ImportedAiFile> = emptyList(),
     val rawText: String = "",

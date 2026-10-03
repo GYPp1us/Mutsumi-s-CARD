@@ -69,6 +69,34 @@ class V090WorkflowTest {
         }
     }
 
+    @Test fun 短横屏主题输入在真实键盘打开后仍可见() {
+        compose.activity.runOnUiThread { compose.activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE }
+        try {
+            waitFor("app-initialized")
+            compose.onNodeWithTag("nav-aibatch").performClick()
+            compose.onNodeWithText("快速主题录入").performClick()
+            compose.onNodeWithTag("ai-quick-topic").performScrollTo().performClick().performTextInput("网络分层")
+            compose.activity.runOnUiThread {
+                androidx.core.view.WindowCompat.getInsetsController(compose.activity.window, compose.activity.window.decorView)
+                    .show(androidx.core.view.WindowInsetsCompat.Type.ime())
+            }
+            compose.waitUntil(8000) {
+                androidx.core.view.ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+                    ?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) == true
+            }
+            compose.waitForIdle()
+            val field = compose.onNodeWithTag("ai-quick-topic").fetchSemanticsNode().boundsInRoot
+            val rootBottom = compose.onNodeWithTag("app-shell").fetchSemanticsNode().boundsInRoot.bottom
+            val imeBottom = androidx.core.view.ViewCompat.getRootWindowInsets(compose.activity.window.decorView)!!
+                .getInsets(androidx.core.view.WindowInsetsCompat.Type.ime()).bottom
+            assertTrue("短横屏键盘打开后必须保留可见的主题输入行",
+                minOf(field.bottom, rootBottom - imeBottom) - field.top >= 48f * compose.activity.resources.displayMetrics.density)
+            hideKeyboard()
+        } finally {
+            compose.activity.runOnUiThread { compose.activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
+        }
+    }
+
     @Test fun 草稿保存只持久化且收起滑块悬浮展开短滑不制作() {
         openDraw()
         compose.onNodeWithTag("draw-key-input").performTextInput("两段式制作")

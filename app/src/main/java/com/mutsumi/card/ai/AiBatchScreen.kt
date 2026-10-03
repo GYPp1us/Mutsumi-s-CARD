@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -139,14 +140,17 @@ fun AiBatchScreen(
     }
 
     CompositionLocalProvider(LocalTextStyle provides MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp)) {
-        BoxWithConstraints(modifier = modifier.fillMaxSize().padding(12.dp)) {
+        val topicIme = state.inputMode == AiInputMode.QuickTopic && WindowInsets.isImeVisible
+        BoxWithConstraints(modifier = modifier.fillMaxSize()
+            .then(if (state.inputMode == AiInputMode.QuickTopic) Modifier.imePadding() else Modifier)
+            .padding(horizontal = 12.dp, vertical = if (topicIme) 4.dp else 12.dp)) {
             val prioritizeManualSource = useImeSourceLayout(maxWidth, maxHeight, WindowInsets.isImeVisible) ||
                 (state.inputMode == AiInputMode.QuickTopic && WindowInsets.isImeVisible)
             Column(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                TabRow(selectedTabIndex = state.inputMode.ordinal) {
+                if (!topicIme) TabRow(selectedTabIndex = state.inputMode.ordinal) {
                     AiInputMode.entries.forEach { mode ->
                         Tab(selected = state.inputMode == mode,
                             enabled = !state.isGenerating && !state.isImporting && !state.isSaving,
@@ -232,7 +236,7 @@ private fun WorkflowTopBar(
                 options = AiGroupCountRange.entries.toList(),
                 optionLabel = AiGroupCountRange::label,
                 onSelect = { onParameters(state.parameters.copy(groupCountRange = it)) },
-                compact = maxWidth < 620.dp,
+                compact = maxWidth < 900.dp,
             )
             ParameterMenu(
                 label = "每组候选",
@@ -240,9 +244,9 @@ private fun WorkflowTopBar(
                 options = (1..5).toList(),
                 optionLabel = Int::toString,
                 onSelect = { onParameters(state.parameters.copy(candidatesPerGroup = it)) },
-                compact = maxWidth < 620.dp,
+                compact = maxWidth < 900.dp,
             )
-            DeckMenu(state, onParameters, onCreateDeck, compact = maxWidth < 620.dp)
+            DeckMenu(state, onParameters, onCreateDeck, compact = maxWidth < 900.dp)
         }
         if (maxWidth < 620.dp) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -299,20 +303,22 @@ private fun WorkflowActions(
 @Composable
 private fun QuickTopicLayout(state: AiBatchUiState, viewModel: AiBatchViewModel, wide: Boolean, short: Boolean, imeVisible: Boolean) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    val crampedIme = short && imeVisible
     val input: @Composable (Modifier) -> Unit = { modifier ->
         WorkflowSurface(modifier.testTag("ai-quick-pane")) {
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (!short) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp, vertical = if (crampedIme) 4.dp else 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (!short && !imeVisible) {
                     Text("输入一个学习主题", style = MaterialTheme.typography.titleMedium)
                     Text("无需准备文件。描述你想掌握的知识，生成后逐张审核候选。", style = MaterialTheme.typography.bodySmall)
                 }
                 OutlinedTextField(value = state.quickTopic, onValueChange = viewModel::setQuickTopic,
                     label = { Text("学习主题") }, placeholder = { Text("例如：二叉树的遍历与时间复杂度") },
-                    enabled = !state.isGenerating && !state.isSaving, minLines = 2, maxLines = 4,
+                    enabled = !state.isGenerating && !state.isSaving, minLines = if (crampedIme) 1 else 2, maxLines = if (crampedIme) 1 else 4,
                     modifier = Modifier.fillMaxWidth().testTag("ai-quick-topic"))
                 OutlinedTextField(value = state.quickInstructions, onValueChange = viewModel::setQuickInstructions,
                     label = { Text("补充要求（可选）") }, placeholder = { Text("考试范围、难度、例子或容易混淆的知识点") },
-                    enabled = !state.isGenerating && !state.isSaving, minLines = 3, maxLines = 6,
+                    enabled = !state.isGenerating && !state.isSaving, minLines = if (crampedIme) 1 else 3, maxLines = if (crampedIme) 1 else 6,
                     modifier = Modifier.fillMaxWidth().testTag("ai-quick-instructions"))
             }
         }

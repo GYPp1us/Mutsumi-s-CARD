@@ -116,11 +116,11 @@ object AiWorkflowContextComposer {
         plan: AiWorkflowPlan,
         definition: AiWorkflowDefinition,
         parameters: AiGenerationParameters,
+        systemPrompt: String = AiPrompts.KNOWLEDGE,
     ): AiWorkflowContext {
         val systemSection = buildString {
             append("系统提示：\n")
-            append("根据已连接的笔记材料生成双面 Markdown 记忆卡片。")
-            append("先遵循工作流拆分与拼接结果，再覆盖所有材料主题。\n\n")
+            append(systemPrompt).append("\n\n")
         }
         val fileListSection = buildString {
             append("文件列表：\n")

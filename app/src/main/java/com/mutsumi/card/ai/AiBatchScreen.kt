@@ -7,6 +7,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -24,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -137,12 +140,23 @@ fun AiBatchScreen(
     }
 
     CompositionLocalProvider(LocalTextStyle provides MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp)) {
-        BoxWithConstraints(modifier = modifier.fillMaxSize().padding(12.dp)) {
-            val prioritizeManualSource = useImeSourceLayout(maxWidth, maxHeight, WindowInsets.isImeVisible)
+        val topicIme = state.inputMode == AiInputMode.QuickTopic && WindowInsets.isImeVisible
+        BoxWithConstraints(modifier = modifier.fillMaxSize()
+            .then(if (state.inputMode == AiInputMode.QuickTopic) Modifier.imePadding() else Modifier)
+            .padding(horizontal = 12.dp, vertical = if (topicIme) 4.dp else 12.dp)) {
+            val prioritizeManualSource = useImeSourceLayout(maxWidth, maxHeight, WindowInsets.isImeVisible) ||
+                (state.inputMode == AiInputMode.QuickTopic && WindowInsets.isImeVisible)
             Column(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                if (!topicIme) TabRow(selectedTabIndex = state.inputMode.ordinal) {
+                    AiInputMode.entries.forEach { mode ->
+                        Tab(selected = state.inputMode == mode,
+                            enabled = !state.isGenerating && !state.isImporting && !state.isSaving,
+                            onClick = { viewModel.setInputMode(mode) }, text = { Text(mode.label) })
+                    }
+                }
                 if (!prioritizeManualSource) {
                     WorkflowTopBar(
                         state = state,
@@ -161,6 +175,7 @@ fun AiBatchScreen(
                 }
                 BoxWithConstraints(modifier = Modifier.weight(1f)) {
                     when {
+                        state.inputMode == AiInputMode.QuickTopic -> QuickTopicLayout(state, viewModel, maxWidth >= 700.dp, maxHeight < 240.dp, WindowInsets.isImeVisible)
                         maxWidth >= 1_040.dp -> WideWorkflowLayout(state, viewModel, prioritizeManualSource)
                         maxWidth >= 700.dp -> MediumWorkflowLayout(state, viewModel, prioritizeManualSource)
                         else -> CompactWorkflowLayout(state, viewModel)
@@ -203,6 +218,7 @@ fun AiBatchScreen(
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun WorkflowTopBar(
     state: AiBatchUiState,
     onFiles: () -> Unit,
@@ -220,6 +236,7 @@ private fun WorkflowTopBar(
                 options = AiGroupCountRange.entries.toList(),
                 optionLabel = AiGroupCountRange::label,
                 onSelect = { onParameters(state.parameters.copy(groupCountRange = it)) },
+                compact = maxWidth < 900.dp,
             )
             ParameterMenu(
                 label = "每组候选",
@@ -227,14 +244,15 @@ private fun WorkflowTopBar(
                 options = (1..5).toList(),
                 optionLabel = Int::toString,
                 onSelect = { onParameters(state.parameters.copy(candidatesPerGroup = it)) },
+                compact = maxWidth < 900.dp,
             )
-            DeckMenu(state, onParameters, onCreateDeck)
+            DeckMenu(state, onParameters, onCreateDeck, compact = maxWidth < 900.dp)
         }
         if (maxWidth < 620.dp) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("AI 批量工作流", style = MaterialTheme.typography.titleLarge)
-                controls()
-                WorkflowActions(state.isImporting, state.isGenerating, state.isSaving, onFiles, onFolder, onGenerate)
+                Text("AI 录入", style = MaterialTheme.typography.titleLarge)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { controls() }
+                WorkflowActions(state.isImporting, state.isGenerating, state.isSaving, onFiles, onFolder, onGenerate, state.inputMode == AiInputMode.Knowledge)
                 state.message.takeIf(String::isNotBlank)?.let { WorkflowNotification(it, state.errorMessage != null, onCopyMessage) }
             }
         } else {
@@ -243,9 +261,9 @@ private fun WorkflowTopBar(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("AI 批量工作流", style = MaterialTheme.typography.titleLarge)
+                Text("AI 录入", style = MaterialTheme.typography.titleLarge)
                 controls()
-                WorkflowActions(state.isImporting, state.isGenerating, state.isSaving, onFiles, onFolder, onGenerate)
+                WorkflowActions(state.isImporting, state.isGenerating, state.isSaving, onFiles, onFolder, onGenerate, state.inputMode == AiInputMode.Knowledge)
                 state.message.takeIf(String::isNotBlank)?.let { WorkflowNotification(it, state.errorMessage != null, onCopyMessage) }
             }
         }
@@ -260,11 +278,14 @@ private fun WorkflowActions(
     onFiles: () -> Unit,
     onFolder: () -> Unit,
     onGenerate: () -> Unit,
+    showSources: Boolean = true,
 ) {
     val isBusy = isImporting || isGenerating || isSaving
     Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = onFiles, enabled = !isBusy) { Icon(Icons.Outlined.UploadFile, contentDescription = "导入文本文件") }
-        IconButton(onClick = onFolder, enabled = !isBusy) { Icon(Icons.Outlined.FolderOpen, contentDescription = "递归导入文件夹") }
+        if (showSources) {
+            IconButton(onClick = onFiles, enabled = !isBusy) { Icon(Icons.Outlined.UploadFile, contentDescription = "导入文本文件") }
+            IconButton(onClick = onFolder, enabled = !isBusy) { Icon(Icons.Outlined.FolderOpen, contentDescription = "递归导入文件夹") }
+        }
         Button(onClick = onGenerate, enabled = !isBusy) {
             Icon(Icons.Outlined.PlayArrow, contentDescription = null)
             Spacer(Modifier.width(6.dp))
@@ -272,10 +293,46 @@ private fun WorkflowActions(
                 when {
                     isImporting -> "读取中"
                     isGenerating -> "生成中"
-                    else -> "运行工作流"
+                    else -> if (showSources) "运行工作流" else "生成主题卡片"
                 },
             )
         }
+    }
+}
+
+@Composable
+private fun QuickTopicLayout(state: AiBatchUiState, viewModel: AiBatchViewModel, wide: Boolean, short: Boolean, imeVisible: Boolean) {
+    var tab by rememberSaveable { mutableIntStateOf(0) }
+    val crampedIme = short && imeVisible
+    val input: @Composable (Modifier) -> Unit = { modifier ->
+        WorkflowSurface(modifier.testTag("ai-quick-pane")) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp, vertical = if (crampedIme) 4.dp else 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (!short && !imeVisible) {
+                    Text("输入一个学习主题", style = MaterialTheme.typography.titleMedium)
+                    Text("无需准备文件。描述你想掌握的知识，生成后逐张审核候选。", style = MaterialTheme.typography.bodySmall)
+                }
+                OutlinedTextField(value = state.quickTopic, onValueChange = viewModel::setQuickTopic,
+                    label = { Text("学习主题") }, placeholder = { Text("例如：二叉树的遍历与时间复杂度") },
+                    enabled = !state.isGenerating && !state.isSaving, minLines = if (crampedIme) 1 else 2, maxLines = if (crampedIme) 1 else 4,
+                    modifier = Modifier.fillMaxWidth().testTag("ai-quick-topic"))
+                OutlinedTextField(value = state.quickInstructions, onValueChange = viewModel::setQuickInstructions,
+                    label = { Text("补充要求（可选）") }, placeholder = { Text("考试范围、难度、例子或容易混淆的知识点") },
+                    enabled = !state.isGenerating && !state.isSaving, minLines = if (crampedIme) 1 else 3, maxLines = if (crampedIme) 1 else 6,
+                    modifier = Modifier.fillMaxWidth().testTag("ai-quick-instructions"))
+            }
+        }
+    }
+    if (wide) Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        input(Modifier.weight(1f).fillMaxHeight())
+        if (!imeVisible) ResultPane(state, viewModel, Modifier.weight(1f).fillMaxHeight())
+    } else Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (!imeVisible) TabRow(selectedTabIndex = tab) {
+            Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("主题输入") })
+            Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("候选结果") })
+        }
+        if (tab == 0 || imeVisible) input(Modifier.weight(1f).fillMaxWidth())
+        else ResultPane(state, viewModel, Modifier.weight(1f).fillMaxWidth())
     }
 }
 
@@ -302,9 +359,10 @@ private fun <T> ParameterMenu(
     options: List<T>,
     optionLabel: (T) -> String,
     onSelect: (T) -> Unit,
+    compact: Boolean = false,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    Column(Modifier.widthIn(min = 112.dp, max = 168.dp)) {
+    Column(Modifier.widthIn(min = if (compact) 88.dp else 112.dp, max = if (compact) 88.dp else 168.dp)) {
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Box(Modifier.fillMaxWidth()) {
             OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) { Text(selectedLabel, maxLines = 1) }
@@ -325,9 +383,10 @@ private fun DeckMenu(
     state: AiBatchUiState,
     onParameters: (AiGenerationParameters) -> Unit,
     onCreateDeck: () -> Unit,
+    compact: Boolean = false,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    Column(Modifier.widthIn(min = 160.dp, max = 220.dp)) {
+    Column(Modifier.widthIn(min = if (compact) 128.dp else 160.dp, max = if (compact) 128.dp else 220.dp)) {
         Text("目标卡组", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Box(Modifier.fillMaxWidth()) {
             OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
@@ -581,7 +640,7 @@ private fun WorkflowPane(state: AiBatchUiState, viewModel: AiBatchViewModel, mod
                     "生成任务",
                     "${state.parameters.groupCountRange.label} 组 · 每组 ${state.parameters.candidatesPerGroup} 个候选",
                 ) {
-                    Text("运行后只注册 generate_card_group；候选按 4 秒节流追加到右侧队列。")
+                    Text("按设定的分组与候选数量生成，结果逐组加入候选队列。")
                 }
             }
         }
@@ -666,7 +725,7 @@ private fun ResultPane(state: AiBatchUiState, viewModel: AiBatchViewModel, modif
         Column(Modifier.fillMaxSize()) {
             PaneTitle(
                 Icons.Outlined.AutoAwesome,
-                "③ 结果预览",
+                if (state.inputMode == AiInputMode.QuickTopic) "候选预览" else "③ 结果预览",
                 "${state.groups.size}/${AiCandidateQueue.MAX_PENDING_GROUPS} 组候选已进入队列",
             )
             HorizontalDivider()
@@ -675,7 +734,7 @@ private fun ResultPane(state: AiBatchUiState, viewModel: AiBatchViewModel, modif
             }
             val group = state.groups.getOrNull(state.groupIndex)
             if (group == null) {
-                EmptyState("等待工作流输出", "运行后，候选卡片会按生成顺序追加到这里。", Modifier.weight(1f))
+                EmptyState("等待候选卡片", "运行后，候选卡片会按生成顺序追加到这里。", Modifier.weight(1f))
             } else {
                 LazyRow(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),

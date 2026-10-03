@@ -77,6 +77,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -88,6 +89,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -106,6 +108,12 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
@@ -122,12 +130,17 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collectLatest
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.IOException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 
@@ -141,8 +154,8 @@ sealed interface DrawSaveResult {
     data class Rejected(val message: String) : DrawSaveResult
 }
 
-private enum class CardFace { Front, Back }
-private enum class DrawTool { Pen, Eraser, Move, Markdown, BaseImage }
+internal enum class CardFace { Front, Back }
+internal enum class DrawTool { Pen, Eraser, Move, Markdown, BaseImage }
 private val DrawTool.borderStyle: LayerBorderStyle get() = when (this) {
     DrawTool.Markdown -> LayerBorderStyle.Dashed
     DrawTool.BaseImage -> LayerBorderStyle.Double
@@ -153,14 +166,14 @@ internal val DrawMarkdownOffsetXKey = SemanticsPropertyKey<Float>("Markdown 位�
 internal val DrawMarkdownWidthKey = SemanticsPropertyKey<Int>("Markdown 排版宽度")
 internal val DrawMarkdownReadyKey = SemanticsPropertyKey<Boolean>("Markdown 预览就绪")
 
-private data class FacePoint(val position: Offset)
-private data class FaceStroke(val points: List<FacePoint>, val color: Color, val width: Float)
-private data class FaceSnapshot(
+internal data class FacePoint(val position: Offset)
+internal data class FaceStroke(val points: List<FacePoint>, val color: Color, val width: Float)
+internal data class FaceSnapshot(
     val strokes: List<FaceStroke>, val baseImageBytes: ByteArray?, val baseImageRect: CanvasRect?,
     val camera: CanvasCamera?, val markdownSource: String, val markdownTransform: MarkdownTransform,
 )
 
-private class FaceDraft {
+internal class FaceDraft {
     val inputEnabled = mutableStateOf(true)
     val strokes = mutableStateListOf<FaceStroke>()
     val currentPoints = mutableStateListOf<FacePoint>()
@@ -196,7 +209,7 @@ private class FaceDraft {
     }
 }
 
-private class DualFaceDrawingViewModel : ViewModel() {
+internal class DualFaceDrawingViewModel(private val store: DrawingDraftStore) : ViewModel() {
     val keyText = mutableStateOf("")
     val isKeyLocked = mutableStateOf(false)
     val isSaving = mutableStateOf(false)
@@ -207,13 +220,113 @@ private class DualFaceDrawingViewModel : ViewModel() {
     val penColor = mutableStateOf(Color(0xFF16352E))
     val penWidth = mutableFloatStateOf(6f)
     val status = mutableStateOf("正面可空，背面必填。")
+    val deckId = mutableLongStateOf(0L)
+    val savedProject = mutableStateOf<DrawingDraftProject?>(null)
+    val isLoading = mutableStateOf(true)
+    private val loadJob = viewModelScope.launch {
+        try {
+            withContext(Dispatchers.IO) { store.load() }?.let { restore(it); status.value = "已恢复上次保存的草稿。" }
+        } catch (error: IOException) {
+            status.value = "草稿读取失败，请重试：${error.message}"
+        } catch (error: IllegalArgumentException) {
+            status.value = "草稿格式无效：${error.message}"
+        } finally { isLoading.value = false }
+    }
+
+    fun project() = DrawingDraftProject(
+        deckId = deckId.longValue, keyText = keyText.value, keyLocked = isKeyLocked.value,
+        activeFront = activeFace.value == CardFace.Front, tool = tool.value.name,
+        penColor = penColor.value.toArgb(), penWidth = penWidth.floatValue,
+        front = front.toDraftData(), back = back.toDraftData(),
+    )
+
+    fun draftIsCurrent(): Boolean = savedProject.value?.sameContent(project()) == true
+    fun hasEditingContent(): Boolean = keyText.value.isNotBlank() || front.hasContent() || back.hasContent()
+
+    suspend fun saveDraft() {
+        val snapshot = project()
+        withContext(Dispatchers.IO) { store.save(snapshot) }
+        savedProject.value = snapshot
+        status.value = "草稿已保存，滑动完成制作。"
+    }
+
+    suspend fun clearSavedDraft() {
+        withContext(NonCancellable + Dispatchers.IO) { store.clear() }
+        savedProject.value = null
+    }
+
+    suspend fun awaitLoaded() { loadJob.join() }
+
+    suspend fun useAsBase(key: String, targetDeckId: Long, frontBytes: ByteArray?, backBytes: ByteArray) {
+        awaitLoaded()
+        fun face(bytes: ByteArray?): DraftFaceData {
+            if (bytes == null) return DraftFaceData()
+            val bitmap = requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size)) { "原卡图片无法读取" }
+            val rect = fitImageInCardWorld(bitmap.width, bitmap.height)
+            bitmap.recycle()
+            return DraftFaceData(baseImagePresent = true, baseImageBytes = bytes,
+                baseRect = DraftRectData(rect.left, rect.top, rect.width, rect.height),
+                camera = DraftCameraData(1f, 512f, 812f))
+        }
+        val next = DrawingDraftProject(deckId = targetDeckId, keyText = key, front = face(frontBytes), back = face(backBytes))
+        withContext(Dispatchers.IO) { store.save(next) }
+        restore(next)
+        status.value = "已载入原卡底图并保存草稿，完成后制作新卡片。"
+    }
+
+    private fun restore(project: DrawingDraftProject) {
+        keyText.value = project.keyText
+        deckId.longValue = project.deckId
+        isKeyLocked.value = project.keyLocked
+        activeFace.value = if (project.activeFront) CardFace.Front else CardFace.Back
+        tool.value = DrawTool.valueOf(project.tool)
+        penColor.value = Color(project.penColor)
+        penWidth.floatValue = project.penWidth
+        front.restore(project.front); back.restore(project.back)
+        savedProject.value = project
+    }
 
     fun face(side: CardFace): FaceDraft = if (side == CardFace.Front) front else back
 }
 
+private fun FaceDraft.toDraftData(): DraftFaceData {
+    val transform = markdownTransform.value
+    return DraftFaceData(
+        strokes = strokes.map { stroke -> DraftStrokeData(stroke.points.map { DraftPointData(it.position.x, it.position.y) }, stroke.color.toArgb(), stroke.width) },
+        baseImagePresent = baseImageBytes.value != null, baseImageBytes = baseImageBytes.value,
+        baseRect = baseImageRect.value?.let { DraftRectData(it.left, it.top, it.width, it.height) },
+        camera = camera.value?.let { DraftCameraData(it.zoom, it.centerX, it.centerY) },
+        markdown = markdownSource.value, markdownWidth = transform.width, markdownX = transform.offsetX, markdownY = transform.offsetY,
+    )
+}
+
+private fun FaceDraft.restore(data: DraftFaceData) {
+    clear()
+    strokes.addAll(data.strokes.map { stroke -> FaceStroke(stroke.points.map { FacePoint(Offset(it.x, it.y)) }, Color(stroke.color), stroke.width) })
+    baseImageBytes.value = data.baseImageBytes
+    data.baseImageBytes?.let { bytes ->
+        val bitmap = requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size)) { "草稿底图无法读取" }
+        baseImageSize.value = IntSize(bitmap.width, bitmap.height); bitmap.recycle()
+    }
+    baseImageRect.value = data.baseRect?.let { CanvasRect(it.x, it.y, it.width, it.height) }
+    camera.value = data.camera?.let { CanvasCamera(it.zoom, it.x - 512f / it.zoom, it.y - 812f / it.zoom, 1024f, 1624f) }
+    markdownSource.value = data.markdown
+    markdownTransform.value = MarkdownTransform(data.markdownWidth, data.markdownX, data.markdownY)
+}
+
 @Composable
 fun DrawScreen(onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult) {
-    val session: DualFaceDrawingViewModel = viewModel { DualFaceDrawingViewModel() }
+    val context = LocalContext.current
+    val session: DualFaceDrawingViewModel = viewModel { DualFaceDrawingViewModel(DrawingDraftStore(File(context.filesDir, "drawing/current-draft.zip"))) }
+    DrawingEditor(session, onSaveCard = onSaveCard)
+}
+
+@Composable
+internal fun DrawingEditor(
+    session: DualFaceDrawingViewModel,
+    onCompleted: () -> Unit = {},
+    onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult,
+) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
@@ -226,8 +339,13 @@ fun DrawScreen(onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult) {
     val markdownRenderer = remember(context) { MarkdownLayerRenderer(context) }
     val activity = remember(context) { context.findActivity() }
     val currentOnSaveCard by rememberUpdatedState(onSaveCard)
+    val currentOnCompleted by rememberUpdatedState(onCompleted)
     var pickerTarget by remember { mutableStateOf<CardFace?>(null) }
     var clearTarget by remember { mutableStateOf<CardFace?>(null) }
+    var saveBounds by remember { mutableStateOf<Rect?>(null) }
+    var rootOrigin by remember { mutableStateOf(Offset.Zero) }
+    val density = LocalDensity.current
+    val draftReady = session.draftIsCurrent()
 
     fun setMarkdownEditingFace(face: CardFace?) {
         if (session.isSaving.value) return
@@ -285,8 +403,9 @@ fun DrawScreen(onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult) {
         session.status.value = "${face.label}底图已插入。"
     }
 
-    fun save() {
+    fun finish() {
         if (session.isSaving.value) return
+        if (!session.draftIsCurrent()) { session.status.value = "内容已改变，请先保存草稿。"; return }
         val key = session.keyText.value.trim()
         if (key.isEmpty()) {
             session.status.value = "请输入文字 key。"
@@ -310,15 +429,25 @@ fun DrawScreen(onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult) {
                     val front = if (frontFallsBackToKey) null else renderFacePng(frontSnapshot, markdownRenderer)
                     front to back
                 }
+                val result = currentOnSaveCard(key, DrawnCardImage(front, back))
+                var cleanupMessage = ""
+                if (result is DrawSaveResult.Saved) {
+                    try { session.clearSavedDraft() }
+                    catch (error: IOException) {
+                        session.savedProject.value = null
+                        cleanupMessage = "；卡片已制作，但草稿清理失败：${error.message}"
+                    }
+                }
                 persistDrawnCard(
-                    onSave = { currentOnSaveCard(key, DrawnCardImage(front, back)) },
+                    onSave = { result },
                     onPersisted = { message ->
                         session.keyText.value = ""
                         session.isKeyLocked.value = false
                         session.front.clear()
                         session.back.clear()
                         session.activeFace.value = CardFace.Front
-                        session.status.value = "$message；${frontSaveFeedback(frontFallsBackToKey)}。"
+                        session.status.value = "$message；${frontSaveFeedback(frontFallsBackToKey)}。$cleanupMessage"
+                        currentOnCompleted()
                     },
                     onRejected = { message ->
                         session.status.value = "卡片保存失败：$message"
@@ -326,6 +455,8 @@ fun DrawScreen(onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult) {
                 )
             } catch (invalid: IllegalArgumentException) {
                 session.status.value = "无法保存：${invalid.message}"
+            } catch (error: IOException) {
+                session.status.value = "保存失败，草稿保留：${error.message}"
             } finally {
                 session.isSaving.value = false
                 session.front.inputEnabled.value = true
@@ -334,8 +465,23 @@ fun DrawScreen(onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult) {
         }
     }
 
+    fun saveDraft() {
+        if (session.isSaving.value || session.isLoading.value) return
+        focusManager.clearFocus(force = true)
+        session.isSaving.value = true
+        session.front.inputEnabled.value = false; session.back.inputEnabled.value = false
+        scope.launch {
+            try { session.saveDraft() }
+            catch (error: IOException) { session.status.value = "草稿保存失败，原内容保留：${error.message}" }
+            finally {
+                session.isSaving.value = false
+                session.front.inputEnabled.value = true; session.back.inputEnabled.value = true
+            }
+        }
+    }
+
     BoxWithConstraints(
-        modifier = Modifier.fillMaxSize().onPreviewKeyEvent { event ->
+        modifier = Modifier.fillMaxSize().onGloballyPositioned { rootOrigin = it.positionInRoot() }.onPreviewKeyEvent { event ->
             if (!session.isSaving.value && event.type == KeyEventType.KeyDown && event.isCtrlPressed && event.key == Key.W) {
                 val draft = session.face(session.activeFace.value)
                 session.tool.value = DrawTool.Markdown
@@ -449,13 +595,28 @@ fun DrawScreen(onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult) {
                         setMarkdownEditingFace(if (draft.markdownEditing.value) null else session.activeFace.value)
                     }
                 },
-                onSave = ::save,
+                draftReady = draftReady,
+                onSaveBounds = { saveBounds = it },
+                onSave = ::saveDraft,
                     modifier = Modifier.width(contextWidth).fillMaxHeight(),
                 )
             }
         }
-        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(horizontal = 76.dp, vertical = 8.dp))
-        if (session.isSaving.value) {
+        val bounds = saveBounds
+        val targetWidth = if (draftReady && session.isKeyLocked.value) 224.dp.coerceAtMost(maxWidth - 16.dp)
+            else with(density) { (bounds?.width ?: 48f).toDp() }
+        val finishWidth by animateDpAsState(targetWidth, tween(180), label = "完成制作按钮展开")
+        if (draftReady && bounds != null) {
+            val widthPx = with(density) { finishWidth.toPx() }
+            SlideToComplete(
+                enabled = !session.isSaving.value && !session.isLoading.value,
+                modifier = Modifier.width(finishWidth).offset {
+                    IntOffset((bounds.right - rootOrigin.x - widthPx).roundToInt(), (bounds.top - rootOrigin.y).roundToInt())
+                }, onComplete = ::finish,
+            )
+        }
+        SnackbarHost(snackbar, Modifier.align(if (draftReady) Alignment.TopCenter else Alignment.BottomCenter).padding(horizontal = 76.dp, vertical = 8.dp))
+        if (session.isSaving.value || session.isLoading.value) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -472,7 +633,7 @@ fun DrawScreen(onSaveCard: suspend (String, DrawnCardImage) -> DrawSaveResult) {
                     },
                 contentAlignment = Alignment.Center,
             ) {
-                Text("正在保存卡片…", style = MaterialTheme.typography.titleMedium)
+                Text(if (session.isLoading.value) "正在恢复草稿…" else "正在保存…", style = MaterialTheme.typography.titleMedium)
             }
         }
     }
@@ -638,6 +799,8 @@ private fun EditorContextPanel(
     onColorChange: (Color) -> Unit,
     onWidthChange: (Float) -> Unit,
     onToggleMarkdown: () -> Unit,
+    draftReady: Boolean,
+    onSaveBounds: (Rect) -> Unit,
     onSave: () -> Unit,
     modifier: Modifier,
 ) {
@@ -712,20 +875,21 @@ private fun EditorContextPanel(
             color = MaterialTheme.colorScheme.onSurfaceVariant, minLines = 1, maxLines = 3,
             overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().testTag("draw-status"),
         )
-        Button(
+        if (draftReady) Box(Modifier.fillMaxWidth().height(48.dp).onGloballyPositioned { onSaveBounds(it.boundsInRoot()) })
+        else Button(
             onClick = onSave, enabled = !isSaving, shape = RoundedCornerShape(8.dp),
             contentPadding = if (keyLocked) PaddingValues(0.dp) else PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("save-card"),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).onGloballyPositioned { onSaveBounds(it.boundsInRoot()) }.testTag("save-card"),
         ) {
             if (keyLocked) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Default.Save, contentDescription = "保存卡片", modifier = Modifier.size(20.dp))
-                    Text("保存", fontSize = 10.sp, lineHeight = 13.sp, maxLines = 1)
+                    Icon(Icons.Default.Save, contentDescription = "保存草稿", modifier = Modifier.size(20.dp))
+                    Text("保存草稿", fontSize = 10.sp, lineHeight = 13.sp, maxLines = 1)
                 }
             } else {
                 Icon(Icons.Default.Save, contentDescription = null)
                 Spacer(Modifier.width(6.dp))
-                Text(if (isSaving) "正在保存" else "保存", maxLines = 1)
+                Text(if (isSaving) "正在保存" else "保存草稿", maxLines = 1)
             }
         }
     }

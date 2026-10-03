@@ -2,6 +2,8 @@ package com.mutsumi.card
 
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -37,7 +39,9 @@ import com.mutsumi.card.data.AppContainer
 import com.mutsumi.card.domain.review.ReviewFeedback
 import com.mutsumi.card.domain.workflow.MemoryCard
 import com.mutsumi.card.draw.DrawSaveResult
-import com.mutsumi.card.draw.DrawScreen
+import com.mutsumi.card.draw.DrawingEditor
+import com.mutsumi.card.draw.DualFaceDrawingViewModel
+import com.mutsumi.card.draw.DrawingDraftStore
 import com.mutsumi.card.study.StudyScreen
 import com.mutsumi.card.settings.AndroidUpdateDownloader
 import com.mutsumi.card.settings.AppUpdateEvent
@@ -77,6 +81,30 @@ fun MutsumiCardApp(appContainer: AppContainer) {
     var selectedDeckId by rememberSaveable { mutableLongStateOf(0L) }
     val feedback = remember { FeedbackController() }
     val scope = rememberCoroutineScope()
+    val drawingSession: DualFaceDrawingViewModel = viewModel {
+        DualFaceDrawingViewModel(DrawingDraftStore(File(context.applicationContext.filesDir, "drawing/current-draft.zip")))
+    }
+    var pendingRedraw by remember { mutableStateOf<com.mutsumi.card.domain.model.MemoryCard?>(null) }
+    var loadingBase by remember { mutableStateOf(false) }
+
+    fun loadCardAsBase(card: com.mutsumi.card.domain.model.MemoryCard) {
+        if (loadingBase || drawingSession.isSaving.value) return
+        loadingBase = true
+        scope.launch {
+            try {
+                val front = card.frontImagePath?.let { appContainer.imageStore.read(it) }
+                val back = appContainer.imageStore.read(card.valueImagePath)
+                drawingSession.useAsBase(card.keyText, card.deckId, front, back)
+                selectedDeckId = card.deckId
+                selectedName = AppDestination.Draw.name
+                feedback.show("已载入原卡底图，原卡保留。")
+            } catch (error: IOException) {
+                feedback.show("底图载入失败，当前草稿保留：${error.message}")
+            } catch (error: IllegalArgumentException) {
+                feedback.show("底图载入失败，当前草稿保留：${error.message}")
+            } finally { loadingBase = false }
+        }
+    }
 
     val cardsViewModel: CardsViewModel = viewModel {
         CardsViewModel(appContainer.cardRepository, appContainer.appPreferences, SavedStateHandle())
@@ -139,13 +167,21 @@ fun MutsumiCardApp(appContainer: AppContainer) {
                 is CardsEvent.Message -> feedback.show(event.text)
                 is CardsEvent.OpenNewCard -> {
                     selectedDeckId = event.deckId
+                    if (!drawingSession.hasEditingContent()) drawingSession.deckId.longValue = event.deckId
                     selectedName = AppDestination.Draw.name
                 }
                 is CardsEvent.OpenRedraw -> {
-                    feedback.show("重新绘制会在后续版本保留原图；当前请新建卡片")
-                    selectedName = AppDestination.Draw.name
+                    drawingSession.awaitLoaded()
+                    if (drawingSession.hasEditingContent()) pendingRedraw = event.card
+                    else loadCardAsBase(event.card)
                 }
             }
+        }
+    }
+
+    LaunchedEffect(cardsState.currentDeck?.id, drawingSession.isLoading.value) {
+        if (!drawingSession.isLoading.value && drawingSession.deckId.longValue == 0L) {
+            drawingSession.deckId.longValue = cardsState.currentDeck?.id ?: selectedDeckId
         }
     }
 
@@ -158,7 +194,7 @@ fun MutsumiCardApp(appContainer: AppContainer) {
                     card = cardsState.selectedCard,
                     imageContent = { card, modifier -> StoredCardValueImage(card, appContainer.imageStore, modifier) },
                     keySaveRevision = cardsState.keySaveRevision,
-                    isBusy = cardsState.isBusy,
+                    isBusy = cardsState.isBusy || loadingBase || drawingSession.isSaving.value,
                     compactHeight = maxHeight <= 420.dp,
                     onSaveKey = callbacks.onSaveKey,
                     onRedraw = callbacks.onRedraw,
@@ -180,17 +216,20 @@ fun MutsumiCardApp(appContainer: AppContainer) {
             when (selected) {
                 AppDestination.Study -> StudyDestination(appContainer, selectedDeckId, feedback)
                 AppDestination.Cards -> CardsScreen(
-                    uiState = cardsState,
+                    uiState = cardsState.copy(isBusy = cardsState.isBusy || loadingBase || drawingSession.isSaving.value),
                     layoutMode = mode,
                     imageContent = { card, modifier -> StoredCardValueImage(card, appContainer.imageStore, modifier) },
                     callbacks = callbacks,
                 )
-                AppDestination.Draw -> DrawScreen { key, image ->
-                    val deckId = selectedDeckId.takeIf { it > 0 } ?: cardsState.currentDeck?.id
+                AppDestination.Draw -> DrawingEditor(drawingSession, onCompleted = {
+                    selectedName = AppDestination.Study.name
+                    scope.launch { feedback.show(drawingSession.status.value) }
+                }) { key, image ->
+                    val deckId = drawingSession.deckId.longValue.takeIf { it > 0 } ?: cardsState.currentDeck?.id
                     if (deckId == null) {
                         val message = "当前没有可用卡组"
                         scope.launch { feedback.show("卡片保存失败：$message") }
-                        return@DrawScreen DrawSaveResult.Rejected(message)
+                        return@DrawingEditor DrawSaveResult.Rejected(message)
                     }
                     selectedDeckId = deckId
                     try {
@@ -203,10 +242,8 @@ fun MutsumiCardApp(appContainer: AppContainer) {
                     } catch (error: IOException) {
                         val message = error.message ?: "无法写入卡片图片"
                         scope.launch { feedback.show("卡片保存失败：$message") }
-                        return@DrawScreen DrawSaveResult.Rejected(message)
+                        return@DrawingEditor DrawSaveResult.Rejected(message)
                     }
-                    scope.launch { feedback.show("卡片已保存：$key") }
-                    selectedName = AppDestination.Study.name
                     DrawSaveResult.Saved("卡片已保存")
                 }
                 AppDestination.Backup -> BackupScreen(backupViewModel, feedback)
@@ -219,6 +256,15 @@ fun MutsumiCardApp(appContainer: AppContainer) {
                 )
             }
         }
+    }
+    pendingRedraw?.let { card ->
+        AlertDialog(
+            onDismissRequest = { pendingRedraw = null },
+            title = { Text("替换当前制作草稿？") },
+            text = { Text("当前制作内容将替换为这张卡片的正反面底图。原卡片保留。") },
+            confirmButton = { TextButton(onClick = { pendingRedraw = null; loadCardAsBase(card) }) { Text("载入底图") } },
+            dismissButton = { TextButton(onClick = { pendingRedraw = null }) { Text("取消") } },
+        )
     }
 }
 

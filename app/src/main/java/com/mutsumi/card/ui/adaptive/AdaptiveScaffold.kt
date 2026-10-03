@@ -15,6 +15,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.systemBars
@@ -86,7 +89,8 @@ fun AdaptiveScaffold(
                 BoxWithConstraints(
                     Modifier
                         .fillMaxSize()
-                        .padding(safePadding),
+                        .padding(safePadding)
+                        .consumeWindowInsets(safePadding),
                 ) {
                     val widthDp = maxWidth.value.roundToInt()
                     val heightDp = maxHeight.value.roundToInt()
@@ -252,9 +256,10 @@ private fun BottomNavigationBar(
 ) {
     Row(
         Modifier
-            .height(64.dp)
             .background(Surface)
             .border(width = 1.dp, color = Divider)
+            .windowInsetsPadding(WindowInsets.navigationBars)
+            .height(64.dp)
             .testTag("bottom-navigation"),
     ) {
         AppDestination.entries.forEach { destination ->

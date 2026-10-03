@@ -19,6 +19,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -35,6 +36,7 @@ import com.mutsumi.card.focus.FocusReporterController
 import com.mutsumi.card.focus.FocusSettingsSection
 import com.mutsumi.card.settings.AppUpdateSettingsSection
 import com.mutsumi.card.settings.AppUpdateViewModel
+import com.mutsumi.card.settings.CollapsibleSettingsGroup
 import com.mutsumi.card.ui.components.FeedbackController
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -82,7 +84,7 @@ fun AiSettingsScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("设置", style = MaterialTheme.typography.titleLarge)
-        Text("AI 录入", style = MaterialTheme.typography.titleMedium)
+        CollapsibleSettingsGroup("AI 连接", "ai-connection", initiallyExpanded = true) {
         OutlinedTextField(
             value = settings.endpoint,
             onValueChange = { value -> updateSettings { current -> current.copy(endpoint = value) } },
@@ -129,7 +131,21 @@ fun AiSettingsScreen(
                 .testTag("ai-settings-model"),
             singleLine = true,
         )
+        }
+        CollapsibleSettingsGroup("AI 系统提示词", "ai-prompts") {
+            Text("两种录入分支与生成助手分别设置。保存后用于下一次生成。", style = MaterialTheme.typography.bodySmall)
+            PromptEditor("知识库分割", "ai-prompt-knowledge", settings.knowledgePrompt,
+                { value -> updateSettings { it.copy(knowledgePrompt = value) } },
+                { updateSettings { it.copy(knowledgePrompt = AiPrompts.KNOWLEDGE) } })
+            PromptEditor("快速主题录入", "ai-prompt-quick", settings.quickTopicPrompt,
+                { value -> updateSettings { it.copy(quickTopicPrompt = value) } },
+                { updateSettings { it.copy(quickTopicPrompt = AiPrompts.QUICK_TOPIC) } })
+            PromptEditor("生成助手", "ai-prompt-generation", settings.generationPrompt,
+                { value -> updateSettings { it.copy(generationPrompt = value) } },
+                { updateSettings { it.copy(generationPrompt = AiPrompts.GENERATION) } })
+        }
         Button(
+            modifier = Modifier.testTag("ai-settings-save"),
             onClick = {
                 val settingsToSave = settings
                 isSaving = true
@@ -168,7 +184,20 @@ fun AiSettingsScreen(
             )
         }
         if (message.isNotBlank()) Text(message)
-        focusReporter?.let { FocusSettingsSection(it, feedback) }
-        AppUpdateSettingsSection(appUpdateViewModel, feedback)
+        focusReporter?.let { reporter ->
+            CollapsibleSettingsGroup("408 Dashboard 专注上报", "focus") { FocusSettingsSection(reporter, feedback) }
+        }
+        CollapsibleSettingsGroup("应用更新", "update") { AppUpdateSettingsSection(appUpdateViewModel, feedback) }
     }
+}
+
+@Composable
+private fun PromptEditor(label: String, tag: String, value: String, onChange: (String) -> Unit, onReset: () -> Unit) {
+    val bringIntoView = remember { BringIntoViewRequester() }
+    val scope = rememberCoroutineScope()
+    OutlinedTextField(value = value, onValueChange = { onChange(it.take(20_000)) }, label = { Text(label) },
+        minLines = 3, maxLines = 6,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 112.dp).testTag(tag).bringIntoViewRequester(bringIntoView)
+            .onFocusEvent { if (it.isFocused) scope.launch { bringIntoView.bringIntoView() } })
+    TextButton(onClick = onReset, modifier = Modifier.testTag("$tag-reset")) { Text("恢复${label}默认提示词") }
 }

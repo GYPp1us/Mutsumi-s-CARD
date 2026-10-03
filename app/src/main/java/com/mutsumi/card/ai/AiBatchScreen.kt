@@ -140,7 +140,8 @@ fun AiBatchScreen(
 
     CompositionLocalProvider(LocalTextStyle provides MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp)) {
         BoxWithConstraints(modifier = modifier.fillMaxSize().padding(12.dp)) {
-            val prioritizeManualSource = useImeSourceLayout(maxWidth, maxHeight, WindowInsets.isImeVisible)
+            val prioritizeManualSource = useImeSourceLayout(maxWidth, maxHeight, WindowInsets.isImeVisible) ||
+                (state.inputMode == AiInputMode.QuickTopic && WindowInsets.isImeVisible)
             Column(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -231,6 +232,7 @@ private fun WorkflowTopBar(
                 options = AiGroupCountRange.entries.toList(),
                 optionLabel = AiGroupCountRange::label,
                 onSelect = { onParameters(state.parameters.copy(groupCountRange = it)) },
+                compact = maxWidth < 620.dp,
             )
             ParameterMenu(
                 label = "每组候选",
@@ -238,8 +240,9 @@ private fun WorkflowTopBar(
                 options = (1..5).toList(),
                 optionLabel = Int::toString,
                 onSelect = { onParameters(state.parameters.copy(candidatesPerGroup = it)) },
+                compact = maxWidth < 620.dp,
             )
-            DeckMenu(state, onParameters, onCreateDeck)
+            DeckMenu(state, onParameters, onCreateDeck, compact = maxWidth < 620.dp)
         }
         if (maxWidth < 620.dp) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -350,9 +353,10 @@ private fun <T> ParameterMenu(
     options: List<T>,
     optionLabel: (T) -> String,
     onSelect: (T) -> Unit,
+    compact: Boolean = false,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    Column(Modifier.widthIn(min = 112.dp, max = 168.dp)) {
+    Column(Modifier.widthIn(min = if (compact) 88.dp else 112.dp, max = if (compact) 88.dp else 168.dp)) {
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Box(Modifier.fillMaxWidth()) {
             OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) { Text(selectedLabel, maxLines = 1) }
@@ -373,9 +377,10 @@ private fun DeckMenu(
     state: AiBatchUiState,
     onParameters: (AiGenerationParameters) -> Unit,
     onCreateDeck: () -> Unit,
+    compact: Boolean = false,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    Column(Modifier.widthIn(min = 160.dp, max = 220.dp)) {
+    Column(Modifier.widthIn(min = if (compact) 128.dp else 160.dp, max = if (compact) 128.dp else 220.dp)) {
         Text("目标卡组", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Box(Modifier.fillMaxWidth()) {
             OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {

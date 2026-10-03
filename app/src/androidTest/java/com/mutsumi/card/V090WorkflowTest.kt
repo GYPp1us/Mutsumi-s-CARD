@@ -49,7 +49,18 @@ class V090WorkflowTest {
             compose.waitForIdle()
             val field = compose.onNodeWithTag("ai-quick-topic").fetchSemanticsNode().boundsInRoot
             assertTrue("主题输入框首屏必须完整可见", field.height >= 64f * compose.activity.resources.displayMetrics.density)
-            compose.onNodeWithTag("ai-quick-topic").performTextInput("二叉树")
+            compose.onNodeWithTag("ai-quick-topic").performClick().performTextInput("二叉树")
+            compose.activity.runOnUiThread {
+                androidx.core.view.WindowCompat.getInsetsController(compose.activity.window, compose.activity.window.decorView)
+                    .show(androidx.core.view.WindowInsetsCompat.Type.ime())
+            }
+            compose.waitUntil(8000) {
+                androidx.core.view.ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+                    ?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) == true
+            }
+            compose.waitForIdle()
+            assertTrue("键盘打开后主题输入框必须仍完整可见",
+                compose.onNodeWithTag("ai-quick-topic").fetchSemanticsNode().boundsInRoot.height >= 64f * compose.activity.resources.displayMetrics.density)
             hideKeyboard()
             compose.onNodeWithTag("ai-quick-instructions").performScrollTo().performTextInput("加入例子")
             hideKeyboard()

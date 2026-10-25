@@ -22,15 +22,18 @@ class DirectionalCloudSyncServiceTest {
     private inner class Data(var document: CloudSnapshotDocument) : CloudSyncDataAccess {
         var revision = 0L
         var imageReads = 0
+        var largestReadBatch = 0
+        val extraImages = mutableMapOf<String, ByteArray>()
         var applies = 0
         var onImages: (() -> Unit)? = null
         override suspend fun readMetadata() = CloudMetadataState(document, revision.toString())
         override suspend fun readImages(hashes: Set<String>): Map<String, ByteArray> {
             imageReads++
+            largestReadBatch = maxOf(largestReadBatch, hashes.size)
             onImages?.also { onImages = null }?.invoke()
-            return hashes.associateWith { png }
+            return hashes.associateWith { extraImages[it] ?: png }
         }
-        override suspend fun applyPlan(document: CloudSnapshotDocument, images: Map<String, ByteArray>, expectedRevision: String, deleteExtras: Boolean): ImportSummary {
+        override suspend fun applyFiles(document: CloudSnapshotDocument, images: Map<String, java.io.File>, expectedRevision: String, deleteExtras: Boolean): ImportSummary {
             if (expectedRevision != revision.toString()) throw CloudBackupException("本地数据已变化")
             this.document = document; applies++; revision++
             return ImportSummary(document.snapshot.decks.size, document.snapshot.cards.size)
@@ -139,6 +142,51 @@ class DirectionalCloudSyncServiceTest {
     @Test fun `未建立云端数据库时不允许拉取删除`() = runTest {
         val data = Data(doc("原卡")); val remote = Remote()
         assertThat(runCatching { service(data, remote).preview(config, CloudSyncMode.PullDelete) }.exceptionOrNull()).isInstanceOf(CloudBackupException::class.java)
+        assertThat(data.applies).isEqualTo(0)
+    }
+
+    @Test fun `大量新增卡面按单个对象读取而不整批加载图片`() = runTest {
+        val second = png + byteArrayOf(1)
+        val secondHash = sha256(second)
+        val document = doc("第一张", "第二张").let { it.copy(snapshot = it.snapshot.copy(
+            cards = it.snapshot.cards.mapIndexed { i,c -> if (i == 0) c else c.copy(valueImageSha256 = secondHash) }),
+            images = it.images + CloudImageReference(secondHash, second.size.toLong())) }
+        val data = Data(document).apply { extraImages[secondHash] = second }
+        val remote = remote(doc())
+        val service = service(data, remote)
+        service.execute(config, service.preview(config, CloudSyncMode.Push).token) {}
+        assertThat(data.largestReadBatch).isEqualTo(1)
+        assertThat(remote.files.getValue("library-v3/objects/$secondHash.png")).isEqualTo(second)
+    }
+
+    @Test fun `历史版本不能充当推送或删除的目标基准`() = runTest {
+        val data=Data(doc("本地")); val remote=remote(doc("云端最新"))
+        val index=Json.decodeFromString<CloudLibraryIndex>(remote.files.getValue("library-index.json").decodeToString())
+        remote.files["library-index.json"]=Json.encodeToString(index.copy(snapshots=listOf(CloudSnapshotSummary("100-history",100,storageVersion=3)))).encodeToByteArray()
+        remote.files["library-v3/snapshots/100-history.json"]=Json.encodeToString(doc("旧卡")).encodeToByteArray()
+        listOf(CloudSyncMode.Push,CloudSyncMode.PullDelete,CloudSyncMode.PushDelete).forEach { mode ->
+            val error=runCatching { service(data,remote).preview(config,mode,"100-history") }.exceptionOrNull()
+            assertThat(error).isInstanceOf(CloudBackupException::class.java)
+            assertThat(error?.message).contains("历史版本仅支持增量拉取")
+        }
+        assertThat(remote.writes).isEqualTo(0)
+    }
+
+    @Test fun `旧备份与本地完全相同时仍可首次迁移安全索引`() = runTest {
+        val document=doc("原卡")
+        val data=Data(document)
+        val remote=Remote()
+        val oldIndex=Json.encodeToString(CloudBackupIndex(snapshots=listOf(CloudSnapshotSummary("100-legacy",100,cardCount=1,deckCount=1,imageHashes=listOf(hash))))).encodeToByteArray()
+        remote.files["index.json"]=oldIndex
+        remote.files["snapshots/100-legacy.json"]=Json.encodeToString(document).encodeToByteArray()
+        remote.files["objects/$hash.png"]=png
+        val service=service(data,remote)
+        val preview=service.preview(config,CloudSyncMode.Push)
+        assertThat(preview.plan.entries).isEmpty()
+        service.execute(config,preview.token) {}
+        assertThat(remote.files["library-index.json"]).isNotNull()
+        assertThat(remote.files["library-v3/objects/$hash.png"]).isEqualTo(png)
+        assertThat(remote.files["index.json"]).isEqualTo(oldIndex)
         assertThat(data.applies).isEqualTo(0)
     }
 }

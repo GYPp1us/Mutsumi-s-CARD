@@ -15,6 +15,7 @@ data class CloudSyncEntry(
     val archived: Boolean, val seenCount: Int = 0, val doubleSided: Boolean = false,
     val imageBytes: Long = 0, val previousTitle: String? = null,
     val details: List<String> = emptyList(),
+    val targetUpdatedAt: Long? = null,
 )
 
 data class CloudSyncPlan(val document: CloudSnapshotDocument, val entries: List<CloudSyncEntry>) {
@@ -89,7 +90,7 @@ object CloudSyncPlanner {
                                 if (old.parentSyncId != new.parentSyncId) add("位置：${old.parentSyncId?.let { names[it] } ?: "根目录"} → ${new.parentSyncId?.let { names[it] } ?: "根目录"}")
                                 if (old.archived != new.archived) add(if (new.archived) "将归档" else "将恢复使用")
                             }
-                        }))
+                        }, targetUpdatedAt = old?.updatedAt))
                 }
             }
             (oldCards.keys + newCards.keys).forEach { id ->
@@ -108,7 +109,7 @@ object CloudSyncPlanner {
                                 if (old.archived != new.archived) add(if (new.archived) "将归档" else "将恢复使用")
                                 if (oldReviews[id] != newReviews[id]) add("复习：${oldReviews[id]?.seenCount ?: 0} → ${newReviews[id]?.seenCount ?: 0} 次；权重 ${oldReviews[id]?.weight} → ${newReviews[id]?.weight}")
                             }
-                        }))
+                        }, targetUpdatedAt = old?.updatedAt))
                 }
             }
         }

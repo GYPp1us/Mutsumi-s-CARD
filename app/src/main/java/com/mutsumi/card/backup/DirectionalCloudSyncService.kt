@@ -24,14 +24,15 @@ interface CloudSyncDataAccess {
     suspend fun readMetadata(): CloudMetadataState
     suspend fun readImages(hashes: Set<String>): Map<String, ByteArray>
     /** 实现必须在写入事务中检查预览修订号；拒绝过期清单。 */
-    suspend fun applyPlan(document: CloudSnapshotDocument, images: Map<String, ByteArray>, expectedRevision: String, deleteExtras: Boolean): ImportSummary
+    suspend fun applyFiles(document: CloudSnapshotDocument, images: Map<String, File>, expectedRevision: String, deleteExtras: Boolean): ImportSummary
 }
 
 data class CloudSyncProgress(val stage: String, val completed: Int, val total: Int, val bytes: Long = 0, val totalBytes: Long = 0) {
     val fraction: Float get() = if (total == 0) 0f else (completed.toFloat() / total).coerceIn(0f, 1f)
 }
 
-data class CloudSyncPreview(val token: String, val mode: CloudSyncMode, val plan: CloudSyncPlan, val cloudUpdatedAt: Long, val transferBytes: Long)
+data class CloudSyncPreview(val token: String, val mode: CloudSyncMode, val plan: CloudSyncPlan, val cloudUpdatedAt: Long, val transferBytes: Long,
+    val requiresMigration: Boolean = false)
 
 interface CloudSyncOperations {
     suspend fun inspect(config: CloudBackupConfig): CloudLibraryIndex?
@@ -60,6 +61,7 @@ class DirectionalCloudSyncService(
 
     override suspend fun preview(config: CloudBackupConfig, mode: CloudSyncMode, snapshotId: String?): CloudSyncPreview =
         withContext(Dispatchers.IO) { mutex.withLock {
+            if (snapshotId != null && mode != CloudSyncMode.Pull) throw CloudBackupException("历史版本仅支持增量拉取，不能作为推送或删除的基准")
             val remote = remoteFactory(config)
             val head = readHead(remote)
             if (mode == CloudSyncMode.PullDelete && head.index == null) throw CloudBackupException("云端尚无索引，不能据此删除本地数据")
@@ -74,7 +76,8 @@ class DirectionalCloudSyncService(
             val targetHashes = if (!mode.isPull && head.file == null) emptySet() else
                 (if (mode.isPull) local.document else cloud).images.mapTo(hashSetOf()) { it.sha256 }
             val bytes = plan.document.images.filter { it.sha256 !in targetHashes }.sumOf { it.size }
-            val preview = CloudSyncPreview(UUID.randomUUID().toString(), mode, plan, head.index?.updatedAt ?: 0, bytes)
+            val preview = CloudSyncPreview(UUID.randomUUID().toString(), mode, plan, head.index?.updatedAt ?: 0, bytes,
+                requiresMigration = mode == CloudSyncMode.Push && head.file == null && head.index != null)
             pending.clear()
             pending[preview.token] = Pending(configKey(config), local, head, preview, if (storageVersion == 3) "library-v3/objects" else "objects")
             preview
@@ -90,7 +93,7 @@ class DirectionalCloudSyncService(
             checkLocal(prepared.local)
             val document = prepared.preview.plan.document
             val mode = prepared.preview.mode
-            if (prepared.preview.plan.entries.isEmpty()) {
+            if (prepared.preview.plan.entries.isEmpty() && !prepared.preview.requiresMigration) {
                 progress(CloudSyncProgress("已是最新", 1, 1))
                 return@withLock ImportSummary(0, 0)
             }
@@ -100,42 +103,59 @@ class DirectionalCloudSyncService(
     private suspend fun pull(remote: CloudRemoteStore, prepared: Pending, document: CloudSnapshotDocument, progress: (CloudSyncProgress) -> Unit): ImportSummary {
         val localHashes = prepared.local.document.images.mapTo(hashSetOf()) { it.sha256 }
         progress(CloudSyncProgress("保全本地副本", 0, 1))
-        val localImages = data.readImages(localHashes)
-        saveSafetyCopy(prepared.local.document, localImages)
-        val images = linkedMapOf<String, ByteArray>()
-        var bytes = 0L
-        document.images.forEachIndexed { index, ref ->
-            val image = localImages[ref.sha256] ?: remote.get("${prepared.objectDirectory}/${ref.sha256}.png")
-                ?: throw CloudBackupException("云端缺少图片，请保留当前数据并重新连接")
-            if (image.size.toLong() != ref.size || sha256(image) != ref.sha256) throw CloudBackupException("云端图片校验失败，未修改本地")
-            if (ref.sha256 !in localImages) pngValidator.validate(image)
-            images[ref.sha256] = image
-            bytes += image.size
-            progress(CloudSyncProgress("下载并校验卡面", index + 1, document.images.size + 1, bytes, document.images.sumOf { it.size }))
+        saveSafetyCopy(prepared.local.document)
+        val directory = File(File(storageDirectory, "incoming"), prepared.preview.token).apply { check(mkdirs()) }
+        try {
+            val images = linkedMapOf<String, File>()
+            val totalBytes = document.images.sumOf { it.size }
+            var bytes = 0L
+            document.images.forEachIndexed { index, ref ->
+                val image = if (ref.sha256 in localHashes) data.readImages(setOf(ref.sha256))[ref.sha256]
+                    else remote.get("${prepared.objectDirectory}/${ref.sha256}.png")
+                if (image == null) throw CloudBackupException("卡面缺失，请保留当前数据并重新连接")
+                if (image.size.toLong() != ref.size || sha256(image) != ref.sha256) throw CloudBackupException("卡面校验失败，未修改本地")
+                if (ref.sha256 !in localHashes) pngValidator.validate(image)
+                val target = File(directory, "${ref.sha256}.png")
+                FileOutputStream(target).use { output -> output.write(image); output.fd.sync() }
+                images[ref.sha256] = target
+                bytes += image.size
+                progress(CloudSyncProgress("下载并校验卡面", index + 1, document.images.size + 1, bytes, totalBytes))
+            }
+            checkHead(prepared.head, readHead(remote))
+            // Room 逐张读取文件，并在提交事务内再次检查修订号。
+            val result = data.applyFiles(document, images, prepared.local.revision, prepared.preview.mode.deletes)
+            val warning = cleanupIncoming(directory)
+            progress(CloudSyncProgress("完成", 1, 1, bytes, bytes))
+            return if (warning == null) result else result.copy(warnings = result.warnings + warning)
+        } catch (error: Exception) {
+            cleanupIncoming(directory)?.let { error.addSuppressed(java.io.IOException(it)) }
+            throw error
         }
-        checkHead(prepared.head, readHead(remote))
-        // Room 实现在提交事务内再次检查，不依赖网络请求之前的检查。
-        val result = data.applyPlan(document, images, prepared.local.revision, prepared.preview.mode.deletes)
-        progress(CloudSyncProgress("完成", 1, 1, bytes, bytes))
-        return result
+    }
+
+    private fun cleanupIncoming(directory: File): String? {
+        val root = File(storageDirectory, "incoming").canonicalFile.toPath()
+        check(directory.canonicalFile.toPath().startsWith(root) && directory.canonicalFile.toPath() != root) { "同步临时目录越界" }
+        return if (!directory.exists() || directory.deleteRecursively()) null else "同步已完成，部分临时卡面未能清理"
     }
 
     private suspend fun push(remote: CloudRemoteStore, prepared: Pending, document: CloudSnapshotDocument, progress: (CloudSyncProgress) -> Unit): ImportSummary {
         val head = prepared.head
-        if (head.file != null && head.file.version == null) throw CloudBackupException("服务器未提供索引版本，无法安全发布；请检查 WebDAV 条件写入支持")
+        if (head.file != null && head.file.version == null) throw CloudBackupException("无法核对索引内容，已停止发布")
         val existing = if (head.file == null) emptySet() else head.index?.document?.images?.mapTo(hashSetOf()) { it.sha256 }.orEmpty()
         val needed = document.images.filter { it.sha256 !in existing }
         val localHashes = prepared.local.document.images.mapTo(hashSetOf()) { it.sha256 }
-        val images = data.readImages(needed.mapTo(hashSetOf()) { it.sha256 }.intersect(localHashes))
         remote.ensureDirectories()
+        val totalBytes = needed.sumOf { it.size }
         var bytes = 0L
         needed.forEachIndexed { index, ref ->
-            val image = images[ref.sha256] ?: remote.get("${prepared.objectDirectory}/${ref.sha256}.png")?.also(pngValidator::validate)
+            val image = (if (ref.sha256 in localHashes) data.readImages(setOf(ref.sha256))[ref.sha256] else null)
+                ?: remote.get("${prepared.objectDirectory}/${ref.sha256}.png")?.also(pngValidator::validate)
                 ?: throw CloudBackupException("迁移所需图片缺失，请保留旧备份并重新预览")
             if (image.size.toLong() != ref.size || sha256(image) != ref.sha256) throw CloudBackupException("本地图片已变化，请重新预览")
             remote.put("library-v3/objects/${ref.sha256}.png", image, "image/png")
             bytes += image.size
-            progress(CloudSyncProgress("上传新增卡面", index + 1, needed.size + 2, bytes, needed.sumOf { it.size }))
+            progress(CloudSyncProgress("上传新增卡面", index + 1, needed.size + 2, bytes, totalBytes))
         }
         checkLocal(prepared.local)
         val timestamp = now()
@@ -157,7 +177,8 @@ class DirectionalCloudSyncService(
         }
         // 不立即清理历史对象：旧版本和事故恢复依赖这些原件。
         progress(CloudSyncProgress("完成", 1, 1, bytes, bytes))
-        return ImportSummary(entries.count { it.kind == CloudConflictKind.Deck }, entries.count { it.kind == CloudConflictKind.Card })
+        return if (prepared.preview.requiresMigration) ImportSummary(document.snapshot.decks.size, document.snapshot.cards.size)
+            else ImportSummary(entries.count { it.kind == CloudConflictKind.Deck }, entries.count { it.kind == CloudConflictKind.Card })
     }
 
     private suspend fun checkLocal(expected: CloudMetadataState) {
@@ -209,7 +230,7 @@ class DirectionalCloudSyncService(
         return document
     }
 
-    private fun saveSafetyCopy(document: CloudSnapshotDocument, images: Map<String, ByteArray>) {
+    private suspend fun saveSafetyCopy(document: CloudSnapshotDocument) {
         val directory = File(storageDirectory, "local-safety").apply { check(isDirectory || mkdirs()) }
         val target = File(directory, "${now()}-${UUID.randomUUID()}.zip")
         val temporary = File(directory, ".${target.name}.pending")
@@ -217,7 +238,9 @@ class DirectionalCloudSyncService(
             val zip = ZipOutputStream(object : java.io.FilterOutputStream(output) { override fun close() { flush() } })
             zip.use {
             zip.putNextEntry(ZipEntry("metadata.json")); zip.write(json.encodeToString(document).encodeToByteArray()); zip.closeEntry()
-            images.forEach { (hash, image) ->
+            document.images.forEach { reference ->
+                val hash = reference.sha256
+                val image = data.readImages(setOf(hash))[hash] ?: throw CloudBackupException("本地卡面已变化，未执行拉取")
                 if (sha256(image) != hash) throw CloudBackupException("本地保全图片校验失败，未执行拉取")
                 zip.putNextEntry(ZipEntry("objects/$hash.png")); zip.write(image); zip.closeEntry()
             }

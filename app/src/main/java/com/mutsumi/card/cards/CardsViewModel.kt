@@ -5,6 +5,9 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mutsumi.card.data.CardRepository
+import com.mutsumi.card.data.LibrarySelection
+import com.mutsumi.card.data.LibraryAction
+import com.mutsumi.card.data.LibraryImpact
 import com.mutsumi.card.data.preferences.AppPreferences
 import com.mutsumi.card.domain.model.Deck
 import com.mutsumi.card.domain.model.MemoryCard
@@ -31,6 +34,10 @@ data class CardsUiState(
     val isLoading: Boolean = true,
     val isBusy: Boolean = false,
     val keySaveRevision: Long = 0L,
+    val atRoot: Boolean = false,
+    val showArchived: Boolean = false,
+    val selection: LibrarySelection = LibrarySelection(),
+    val pendingDeleteImpact: LibraryImpact? = null,
 )
 
 class CardsRecoverableException(message: String, cause: Throwable? = null) : Exception(message, cause)
@@ -49,6 +56,8 @@ class CardsViewModel(
 ) : ViewModel() {
     private val query = savedStateHandle.getStateFlow(QUERY_KEY, "")
     private val selectedCardId = savedStateHandle.getStateFlow<Long?>(SELECTED_CARD_KEY, null)
+    private val root = savedStateHandle.getStateFlow("cards.atRoot", false)
+    private val archived = savedStateHandle.getStateFlow("cards.showArchived", false)
     private val mutableUiState = MutableStateFlow(CardsUiState())
     private val eventChannel = Channel<CardsEvent>(Channel.BUFFERED)
     private val mutationMutex = Mutex()
@@ -58,19 +67,20 @@ class CardsViewModel(
 
     init {
         viewModelScope.launch {
-            val deckSelection = combine(repository.decks, preferences.currentDeckId) { decks, selectedId ->
+            val deckSelection = combine(repository.libraryDecks, preferences.currentDeckId) { decks, selectedId ->
                 val selected = decks.firstOrNull { it.id == selectedId } ?: decks.firstOrNull()
                 DeckSelection(decks, selected, selectedId)
             }
-            combine(deckSelection, query) { selection, currentQuery -> selection to currentQuery }
-                .flatMapLatest { (selection, currentQuery) ->
+            combine(deckSelection, query, root, archived) { selection, currentQuery, atRoot, showArchived ->
+                BrowserRequest(selection, currentQuery, atRoot, showArchived)
+            }.flatMapLatest { (selection, currentQuery, atRoot, showArchived) ->
                 val (decks, deck, preferredId) = selection
                 if (deck != null && preferredId != deck.id) repairPreferredDeck(deck.id)
-                if (deck == null) {
-                    MutableStateFlow(Snapshot(decks, null, currentQuery, emptyList()))
+                if (deck == null || atRoot) {
+                    MutableStateFlow(Snapshot(decks, null, currentQuery, emptyList(), atRoot = atRoot, showArchived = showArchived))
                 } else {
-                    repository.cards(deck.id, currentQuery).combine(selectedCardId) { cards, selectedId ->
-                        Snapshot(decks, deck, currentQuery, cards, selectedId)
+                    repository.managementCards(deck.id, currentQuery, showArchived).combine(selectedCardId) { cards, selectedId ->
+                        Snapshot(decks, deck, currentQuery, cards, selectedId, atRoot, showArchived)
                     }
                 }
             }.collect { snapshot ->
@@ -81,6 +91,13 @@ class CardsViewModel(
                     cards = snapshot.cards,
                     selectedCard = snapshot.cards.firstOrNull { it.id == snapshot.selectedId },
                     isLoading = false,
+                    atRoot = snapshot.atRoot,
+                    showArchived = snapshot.showArchived,
+                    selection = mutableUiState.value.selection.let { selected -> LibrarySelection(
+                        selected.cardIds.intersect(snapshot.cards.mapTo(hashSetOf()) { it.id }),
+                        selected.deckIds.intersect(snapshot.decks.filter { it.parentId == snapshot.deck?.id &&
+                            (snapshot.showArchived || !it.archived) && it.name.contains(snapshot.query, ignoreCase = true) }.mapTo(hashSetOf()) { it.id }),
+                    ) },
                 )
             }
         }
@@ -106,6 +123,8 @@ class CardsViewModel(
             return
         }
         launchMutation {
+            savedStateHandle["cards.atRoot"] = false
+            clearSelection()
             preferences.setCurrentDeckId(deckId)
             selectCard(null)
             eventChannel.send(CardsEvent.Message("已切换到“${deck.name}”"))
@@ -115,12 +134,68 @@ class CardsViewModel(
     fun createDeck(name: String) {
         val normalized = normalizedOrReport(name, "请输入卡组名称") ?: return
         launchMutation {
-            val deckId = recoverStorage { repository.createDeck(normalized) }
+            val deckId = recoverStorage { repository.createChildDeck(normalized, uiState.value.currentDeck?.id) }
             preferences.setCurrentDeckId(deckId)
+            savedStateHandle["cards.atRoot"] = false
             selectCard(null)
             eventChannel.send(CardsEvent.Message("已创建卡组“$normalized”"))
         }
     }
+
+    fun browseRoot() {
+        if (uiState.value.isBusy) return
+        clearSelection(); selectCard(null)
+        savedStateHandle["cards.atRoot"] = true
+    }
+
+    fun toggleArchived() { savedStateHandle["cards.showArchived"] = !uiState.value.showArchived; clearSelection() }
+
+    fun toggleCardSelection(id: Long) {
+        if (uiState.value.isBusy) return
+        val selected = uiState.value.selection
+        mutableUiState.value = uiState.value.copy(selection = selected.copy(cardIds = toggle(selected.cardIds, id)), pendingDeleteImpact = null)
+    }
+
+    fun toggleDeckSelection(id: Long) {
+        if (uiState.value.isBusy) return
+        val selected = uiState.value.selection
+        mutableUiState.value = uiState.value.copy(selection = selected.copy(deckIds = toggle(selected.deckIds, id)), pendingDeleteImpact = null)
+    }
+
+    fun selectAll() {
+        if (uiState.value.isBusy) return
+        val state = uiState.value
+        mutableUiState.value = state.copy(pendingDeleteImpact = null, selection = LibrarySelection(state.cards.mapTo(hashSetOf()) { it.id },
+            state.decks.filter { it.parentId == state.currentDeck?.id && (state.showArchived || !it.archived) && it.name.contains(state.query, ignoreCase = true) }.mapTo(hashSetOf()) { it.id }))
+    }
+
+    fun clearSelection() { mutableUiState.value = uiState.value.copy(selection = LibrarySelection(), pendingDeleteImpact = null) }
+
+    fun previewSelectedDeletion() {
+        val selected = uiState.value.selection
+        if (selected.cardIds.isEmpty() && selected.deckIds.isEmpty()) return emitMessage("请先选择项目")
+        launchMutation {
+            val impact = repository.managementImpact(selected)
+            mutableUiState.value = uiState.value.copy(pendingDeleteImpact = impact)
+        }
+    }
+
+    fun dismissSelectedDeletion() { if (!uiState.value.isBusy) mutableUiState.value = uiState.value.copy(pendingDeleteImpact = null) }
+
+    fun manageSelected(action: LibraryAction, target: Long? = null) {
+        val selected = uiState.value.selection
+        val expectedRevision = uiState.value.pendingDeleteImpact?.revision
+        if (action == LibraryAction.Delete && uiState.value.pendingDeleteImpact == null) return previewSelectedDeletion()
+        if (selected.cardIds.isEmpty() && selected.deckIds.isEmpty()) return emitMessage("请先选择项目")
+        launchMutation {
+            val count = try { recoverStorage { repository.manage(selected, action, target, expectedRevision) } }
+            catch (error: IllegalArgumentException) { throw CardsRecoverableException(error.message ?: "无法执行批量操作", error) }
+            clearSelection(); selectCard(null)
+            eventChannel.send(CardsEvent.Message("已${action.label} $count 个项目"))
+        }
+    }
+
+    private fun toggle(values: Set<Long>, id: Long) = if (id in values) values - id else values + id
 
     fun renameCurrentDeck(name: String) {
         val normalized = normalizedOrReport(name, "请输入卡组名称") ?: return
@@ -236,6 +311,8 @@ class CardsViewModel(
         val query: String,
         val cards: List<MemoryCard>,
         val selectedId: Long? = null,
+        val atRoot: Boolean = false,
+        val showArchived: Boolean = false,
     )
 
     private data class DeckSelection(
@@ -243,6 +320,8 @@ class CardsViewModel(
         val deck: Deck?,
         val preferredId: Long?,
     )
+
+    private data class BrowserRequest(val selection: DeckSelection, val query: String, val atRoot: Boolean, val showArchived: Boolean)
 
     private companion object {
         const val QUERY_KEY = "cards.query"

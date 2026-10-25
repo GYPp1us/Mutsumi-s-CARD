@@ -8,6 +8,8 @@ import com.mutsumi.card.data.local.ReviewStateEntity
 import com.mutsumi.card.data.local.SyncApplyRows
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -19,10 +21,10 @@ class RoomCloudBackupDataAccess(
     private val imageStore: CardImageStore,
     private val now: () -> Long = System::currentTimeMillis,
     private val indexFile: File? = null,
-) : CloudBackupDataAccess, CloudSyncDataAccess {
+) : BackupDataAccess, CloudSyncDataAccess {
     private val indexMutex = Mutex()
     private val json = Json { encodeDefaults = true }
-    private var cached: LocalLibraryCache? = null
+    @Volatile private var cached: LocalLibraryCache? = null
 
     override suspend fun readMetadata(): CloudMetadataState = indexMutex.withLock {
         val revision = dao.getLibraryRevision()
@@ -76,8 +78,13 @@ class RoomCloudBackupDataAccess(
         }
     }
 
-    override suspend fun applyPlan(document: CloudSnapshotDocument, images: Map<String, ByteArray>, expectedRevision: String, deleteExtras: Boolean): ImportSummary =
+    suspend fun applyPlan(document: CloudSnapshotDocument, images: Map<String, ByteArray>, expectedRevision: String, deleteExtras: Boolean): ImportSummary =
         applySnapshot(document.snapshot, images, deleteExtras, expectedRevision.toLong())
+
+    override suspend fun applyFiles(document: CloudSnapshotDocument, images: Map<String, File>, expectedRevision: String, deleteExtras: Boolean): ImportSummary =
+        applyWithImages(document.snapshot, images.keys, { hash -> images.getValue(hash).readBytes().also {
+            if (sha256(it) != hash) throw CloudBackupException("临时卡面校验失败，未提交数据库")
+        } }, deleteExtras, expectedRevision.toLong())
     override suspend fun loadExportData(): BackupExportData {
         val rows = dao.getLibraryRows()
         return BackupExportData(BackupSnapshot(
@@ -90,36 +97,28 @@ class RoomCloudBackupDataAccess(
     override suspend fun importBatch(batch: ImportBatch): ImportSummary {
         val decks = batch.snapshot.decks.associate { it.id to java.util.UUID.randomUUID().toString() }
         val cards = batch.snapshot.cards.associate { it.id to java.util.UUID.randomUUID().toString() }
-        val images = batch.images.values.associate { file -> file.readBytes().let { sha256(it) to it } }
         val hashes = batch.images.mapValues { sha256(it.value.readBytes()) }
+        val images = batch.images.entries.associate { hashes.getValue(it.key) to it.value }
         val snapshot = CloudSnapshot(
             batch.snapshot.decks.map { CloudDeckRecord(decks.getValue(it.id), it.name, it.createdAt, it.updatedAt, it.parentId?.let(decks::getValue), it.archived) },
             batch.snapshot.cards.map { CloudCardRecord(cards.getValue(it.id), decks.getValue(it.deckId), it.keyText, it.createdAt, it.updatedAt, it.archived,
                 hashes.getValue(it.valueImagePath), it.frontImagePath?.let(hashes::getValue)) },
             batch.snapshot.reviews.map { CloudReviewRecord(cards.getValue(it.cardId), it.weight, it.seenCount, it.againCount, it.unsureCount, it.knownCount, it.lastReviewedAt) },
         )
-        return applySnapshot(snapshot, images, false, null)
+        return applyWithImages(snapshot, images.keys, { images.getValue(it).readBytes() }, false, null)
     }
-
-    override suspend fun loadCloudState(): CloudLocalState {
-        val metadata = readMetadata()
-        return CloudLocalState(metadata.document, readImages(metadata.document.images.mapTo(hashSetOf()) { it.sha256 }))
-    }
-
-    override suspend fun applyCloudSnapshot(
-        snapshot: CloudSnapshot,
-        images: Map<String, ByteArray>,
-        deleteExtras: Boolean,
-        sourcePaths: Map<String, String>,
-    ): ImportSummary = applySnapshot(snapshot, images, deleteExtras, null)
 
     private suspend fun applySnapshot(snapshot: CloudSnapshot, images: Map<String, ByteArray>, deleteExtras: Boolean, expectedRevision: Long?): ImportSummary {
+        return applyWithImages(snapshot, images.keys, { images.getValue(it) }, deleteExtras, expectedRevision)
+    }
+
+    private suspend fun applyWithImages(snapshot: CloudSnapshot, imageHashes: Set<String>, imageSource: suspend (String) -> ByteArray, deleteExtras: Boolean, expectedRevision: Long?): ImportSummary {
         require(snapshot.decks.map { it.syncId }.toSet().size == snapshot.decks.size) { "云端包含重复卡组 ID" }
         require(snapshot.cards.map { it.syncId }.toSet().size == snapshot.cards.size) { "云端包含重复卡片 ID" }
         val referencedHashes = snapshot.cards.flatMap { card ->
             buildList { add(card.valueImageSha256); card.frontImageSha256?.let(::add) }
         }.toSet()
-        require(referencedHashes == images.keys) { "云端图片引用不完整" }
+        require(referencedHashes == imageHashes) { "云端图片引用不完整" }
 
         val local = dao.getLibraryRows()
         if (expectedRevision != null && expectedRevision != local.revision) throw CloudBackupException("本地数据已变化，请重新预览")
@@ -165,7 +164,7 @@ class RoomCloudBackupDataAccess(
                     current?.valueImagePath,
                     current?.let { cached?.paths?.get(it.valueImagePath)?.sha256 ?: sha256(imageStore.read(it.valueImagePath)) },
                     remote.valueImageSha256,
-                    images,
+                    imageSource,
                     oldImages,
                     createdImages,
                 )
@@ -174,7 +173,7 @@ class RoomCloudBackupDataAccess(
                         current?.frontImagePath,
                         current?.frontImagePath?.let { cached?.paths?.get(it)?.sha256 ?: sha256(imageStore.read(it)) },
                         hash,
-                        images,
+                        imageSource,
                         oldImages,
                         createdImages,
                     )
@@ -216,7 +215,7 @@ class RoomCloudBackupDataAccess(
             }
             val cardsToDelete = if (deleteExtras) localCards.values.filter { it.syncId !in remoteCardIds } else emptyList()
             val decksToDelete = if (deleteExtras) localDecks.values.filter { it.syncId !in remoteDeckIds } else emptyList()
-            dao.applySyncRows(
+            withContext(NonCancellable) { dao.applySyncRows(
                 SyncApplyRows(
                     decksToInsert = deckRows.values.filter { localDecks[it.syncId] == null },
                     decksToUpdate = deckRows.values.filter { localDecks[it.syncId] != null },
@@ -230,7 +229,7 @@ class RoomCloudBackupDataAccess(
                     expectedRevision = expectedRevision ?: local.revision,
                 ),
             )
-            committed = true
+            committed = true }
             return ImportSummary(snapshot.decks.size, snapshot.cards.size)
         } catch (error: Exception) {
             if (!committed) {
@@ -250,13 +249,13 @@ class RoomCloudBackupDataAccess(
         currentPath: String?,
         currentHash: String?,
         expectedHash: String,
-        images: Map<String, ByteArray>,
+        imageSource: suspend (String) -> ByteArray,
         oldImages: MutableList<String>,
         createdImages: MutableList<String>,
     ): String {
         if (currentPath != null && currentHash == expectedHash) return currentPath
         currentPath?.let(oldImages::add)
-        return imageStore.writePng(requireNotNull(images[expectedHash]) { "缺少图片对象：$expectedHash" })
+        return imageStore.writePng(imageSource(expectedHash))
             .also(createdImages::add)
     }
 }

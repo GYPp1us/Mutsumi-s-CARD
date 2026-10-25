@@ -58,6 +58,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Checkbox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -82,6 +83,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mutsumi.card.domain.model.Deck
 import com.mutsumi.card.domain.model.MemoryCard
+import com.mutsumi.card.data.LibraryAction
 import com.mutsumi.card.data.image.CardImageStore
 import com.mutsumi.card.draw.DrawingCanvasSpec
 import com.mutsumi.card.ui.adaptive.AppLayoutMode
@@ -111,6 +113,15 @@ data class CardsCallbacks(
     val onRedraw: () -> Unit,
     val onArchive: () -> Unit,
     val onDelete: () -> Unit,
+    val onBrowseRoot: () -> Unit = {},
+    val onToggleArchived: () -> Unit = {},
+    val onToggleCardSelection: (Long) -> Unit = {},
+    val onToggleDeckSelection: (Long) -> Unit = {},
+    val onSelectAll: () -> Unit = {},
+    val onClearSelection: () -> Unit = {},
+    val onManage: (LibraryAction, Long?) -> Unit = { _, _ -> },
+    val onPreviewDelete: () -> Unit = {},
+    val onDismissDelete: () -> Unit = {},
 )
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
@@ -127,6 +138,9 @@ fun CardsScreen(
     var searchFocused by remember { mutableStateOf(false) }
     val selectedCard = uiState.selectedCard
     val imeVisible = WindowInsets.isImeVisible
+    val childDecks = uiState.decks.filter { it.parentId == uiState.currentDeck?.id &&
+        (uiState.showArchived || !it.archived) && it.name.contains(uiState.query, ignoreCase = true) }
+    val selectionActive = uiState.selection.cardIds.isNotEmpty() || uiState.selection.deckIds.isNotEmpty()
 
     Column(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         if (!imeVisible || !searchFocused) {
@@ -168,6 +182,7 @@ fun CardsScreen(
                 )
             }
         }
+        LibraryManagementToolbar(uiState, callbacks)
         SearchField(
             query = uiState.query,
             onQueryChange = callbacks.onQueryChange,
@@ -179,25 +194,50 @@ fun CardsScreen(
             uiState.isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
-            uiState.cards.isEmpty() -> CardsEmptyState(
+            uiState.cards.isEmpty() && childDecks.isEmpty() -> CardsEmptyState(
                 hasQuery = uiState.query.isNotEmpty(),
                 onClearQuery = callbacks.onClearQuery,
                 onNewCard = callbacks.onNewCard,
                 enabled = !uiState.isBusy,
             )
             else -> LazyColumn(Modifier.fillMaxSize()) {
+                items(childDecks, key = { "deck-${it.id}" }) { deck ->
+                    Row(Modifier.fillMaxWidth().clickable(enabled = !uiState.isBusy) { callbacks.onSwitchDeck(deck.id) }
+                        .padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(deck.id in uiState.selection.deckIds, { callbacks.onToggleDeckSelection(deck.id) }, enabled = !uiState.isBusy, modifier = Modifier.testTag("deck-select-${deck.id}"))
+                        Icon(Icons.Default.FolderOpen, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(30.dp))
+                        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                            Text(deck.name, fontWeight = FontWeight.SemiBold)
+                            Text("${deck.cardCount} 张在用卡片 · ${uiState.decks.count { it.parentId == deck.id }} 个子卡组${if (deck.archived) " · 已归档" else ""}", style = MaterialTheme.typography.labelSmall)
+                        }
+                        Icon(Icons.Default.ChevronRight, "打开卡组")
+                    }
+                    HorizontalDivider()
+                }
                 items(uiState.cards, key = { it.id }) { card ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(card.id in uiState.selection.cardIds, { callbacks.onToggleCardSelection(card.id) }, enabled = !uiState.isBusy, modifier = Modifier.testTag("card-select-${card.id}"))
+                        Box(Modifier.weight(1f)) {
                     CardListItem(
                         card = card,
                         selected = selectedCard?.id == card.id,
                         compact = layoutMode != AppLayoutMode.LandscapeThreePane,
                         imageContent = imageContent,
                         enabled = !uiState.isBusy,
-                        onClick = { callbacks.onSelectCard(card.id) },
+                        onClick = { if (selectionActive) callbacks.onToggleCardSelection(card.id) else callbacks.onSelectCard(card.id) },
                     )
+                        }
+                    }
                 }
             }
         }
+    }
+
+    uiState.pendingDeleteImpact?.let { impact ->
+        AlertDialog(onDismissRequest = callbacks.onDismissDelete, title = { Text("删除所选项目") },
+            text = { Text("将删除 ${impact.deckCount} 个卡组及其全部子级，共 ${impact.cardCount} 张卡片（含 ${impact.archivedCardCount} 张归档卡）。此操作无法撤销。") },
+            confirmButton = { TextButton({ callbacks.onManage(LibraryAction.Delete, null) }, enabled = !uiState.isBusy) { Text("确认删除") } },
+            dismissButton = { TextButton(callbacks.onDismissDelete, enabled = !uiState.isBusy) { Text("取消") } })
     }
 
     if (layoutMode != AppLayoutMode.LandscapeThreePane && selectedCard != null) {
@@ -249,7 +289,8 @@ private fun CardsTopBar(
         Column(Modifier.weight(1f)) {
             Text("卡片", style = MaterialTheme.typography.titleLarge, maxLines = 1)
             Text(
-                "${state.currentDeck?.name ?: "暂无卡组"} · ${state.currentDeck?.cardCount ?: 0} 张",
+                (state.currentDeck?.let { "${it.name} · ${it.cardCount} 张" } ?: "全部卡组 · ${state.decks.count { it.parentId == null }} 组") +
+                    if (LibraryTree.breadcrumbs(state.decks, state.currentDeck?.id).any { it.archived }) " · 已归档" else "",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -285,7 +326,7 @@ private fun SearchField(
             .onFocusEvent { onFocusChanged(it.isFocused) },
         singleLine = true,
         enabled = enabled,
-        placeholder = { Text("搜索文字 key") },
+        placeholder = { Text("搜索卡片或卡组") },
         leadingIcon = { Icon(Icons.Default.Search, null) },
         trailingIcon = if (query.isNotEmpty()) {
             { IconButton(onClick = onClear) { Icon(Icons.Default.Clear, "清除搜索") } }
@@ -322,7 +363,7 @@ private fun CardListItem(
         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
             Text(card.keyText, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(4.dp))
-            Text(reviewSummary(card), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text((if (card.archived) "已归档 · " else "") + reviewSummary(card), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Icon(Icons.Default.ChevronRight, "查看详情", tint = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.width(10.dp))

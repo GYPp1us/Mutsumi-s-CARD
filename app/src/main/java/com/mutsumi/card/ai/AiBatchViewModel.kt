@@ -39,12 +39,13 @@ class AiBatchViewModel(
     init {
         viewModelScope.launch {
             try {
-                val decks = repository.decks.first()
-                mutableState.value = mutableState.value.copy(
-                    settings = settingsStore.load(),
-                    decks = decks,
-                    parameters = mutableState.value.parameters.copy(targetDeckId = decks.firstOrNull()?.id ?: 0L),
-                )
+                mutableState.value = mutableState.value.copy(settings = settingsStore.load())
+                repository.decks.collect { decks ->
+                    val current = mutableState.value
+                    val target = current.parameters.targetDeckId.takeIf { id -> decks.any { it.id == id } }
+                        ?: decks.firstOrNull()?.id ?: 0L
+                    mutableState.value = current.copy(decks = decks, parameters = current.parameters.copy(targetDeckId = target))
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {

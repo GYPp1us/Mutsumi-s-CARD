@@ -53,6 +53,7 @@ import com.mutsumi.card.ui.components.FeedbackHost
 import com.mutsumi.card.ui.navigation.AppDestination
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import java.io.IOException
 import java.io.File
 
@@ -110,11 +111,15 @@ fun MutsumiCardApp(appContainer: AppContainer) {
         CardsViewModel(appContainer.cardRepository, appContainer.appPreferences, SavedStateHandle())
     }
     val cardsState by cardsViewModel.uiState.collectAsState()
+    val preferredDeckId by appContainer.appPreferences.currentDeckId.collectAsState(initial = null)
+    LaunchedEffect(preferredDeckId) {
+        preferredDeckId?.let { selectedDeckId = it }
+    }
     val backupViewModel: BackupViewModel = viewModel {
         BackupViewModel(
             operations = appContainer.backupOperations,
-            cloudOperations = appContainer.cloudBackupOperations,
             cloudSettings = appContainer.cloudBackupSettings,
+            syncOperations = appContainer.cloudSyncOperations,
         )
     }
     val aiViewModel: AiBatchViewModel = viewModel {
@@ -225,26 +230,27 @@ fun MutsumiCardApp(appContainer: AppContainer) {
                     selectedName = AppDestination.Study.name
                     scope.launch { feedback.show(drawingSession.status.value) }
                 }) { key, image ->
-                    val deckId = drawingSession.deckId.longValue.takeIf { it > 0 } ?: cardsState.currentDeck?.id
-                    if (deckId == null) {
-                        val message = "当前没有可用卡组"
-                        scope.launch { feedback.show("卡片保存失败：$message") }
-                        return@DrawingEditor DrawSaveResult.Rejected(message)
-                    }
-                    selectedDeckId = deckId
                     try {
+                        val available = appContainer.cardRepository.decks.first()
+                        val requested = drawingSession.deckId.longValue.takeIf { it > 0 } ?: cardsState.currentDeck?.id
+                        val target = available.firstOrNull { it.id == requested }
+                            ?: available.firstOrNull { it.id == preferredDeckId } ?: available.firstOrNull()
+                        val deckId = target?.id ?: appContainer.cardRepository.ensureDefaultDeck()
+                        drawingSession.deckId.longValue = deckId
+                        selectedDeckId = deckId
+                        appContainer.appPreferences.setCurrentDeckId(deckId)
                         appContainer.cardRepository.saveCard(
                             deckId = deckId,
                             keyText = key,
                             frontPng = image.frontPngBytes,
                             backPng = image.backPngBytes,
                         )
+                        DrawSaveResult.Saved("卡片已保存到“${target?.name ?: "默认卡组"}”")
                     } catch (error: IOException) {
                         val message = error.message ?: "无法写入卡片图片"
                         scope.launch { feedback.show("卡片保存失败：$message") }
                         return@DrawingEditor DrawSaveResult.Rejected(message)
                     }
-                    DrawSaveResult.Saved("卡片已保存")
                 }
                 AppDestination.Backup -> BackupScreen(backupViewModel, feedback)
                 AppDestination.AiBatch -> AiBatchScreen(aiViewModel, feedback)
@@ -323,4 +329,13 @@ private fun CardsViewModel.callbacks() = CardsCallbacks(
     onRedraw = ::requestRedrawSelectedCard,
     onArchive = ::archiveSelectedCard,
     onDelete = ::deleteSelectedCard,
+    onBrowseRoot = ::browseRoot,
+    onToggleArchived = ::toggleArchived,
+    onToggleCardSelection = ::toggleCardSelection,
+    onToggleDeckSelection = ::toggleDeckSelection,
+    onSelectAll = ::selectAll,
+    onClearSelection = ::clearSelection,
+    onManage = ::manageSelected,
+    onPreviewDelete = ::previewSelectedDeletion,
+    onDismissDelete = ::dismissSelectedDeletion,
 )

@@ -17,6 +17,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.util.UUID
@@ -108,10 +109,10 @@ class RoomCardRepository(
                 LibraryAction.Restore -> card.copy(archived = false, updatedAt = stamp)
                 else -> null
             } }
-            dao.applySyncRows(SyncApplyRows(copiedDecks, updatedDecks, copiedCards, updatedCards, copiedReviews,
+            withContext(NonCancellable) { dao.applySyncRows(SyncApplyRows(copiedDecks, updatedDecks, copiedCards, updatedCards, copiedReviews,
                 if (action == LibraryAction.Delete) selectedCards else emptyList(),
                 if (action == LibraryAction.Delete) rows.decks.filter { it.id in subtree } else emptyList(), emptyList(), stamp, rows.revision))
-            committed = true
+            committed = true }
             if (action == LibraryAction.Delete) retryPendingImageCleanup()
             return selectedCards.size + subtree.size
         } catch (error: Exception) {
@@ -127,7 +128,9 @@ class RoomCardRepository(
         } else {
             dao.observeActiveCardsWithReview(deckId, normalizedQuery)
         }
-        return source.map { cards -> cards.map(::toDomain) }
+        return combine(source, decks) { cards, activeDecks ->
+            if (activeDecks.any { it.id == deckId }) cards.map(::toDomain) else emptyList()
+        }
     }
 
     override suspend fun ensureDefaultDeck(): Long {
@@ -246,9 +249,13 @@ class RoomCardRepository(
 
     override suspend fun retryPendingImageCleanup() {
         withContext(NonCancellable + Dispatchers.IO) {
-            dao.getPendingImageDeletions().forEach { deletion ->
+            val pending = dao.getPendingImageDeletions()
+            if (pending.isEmpty()) return@withContext
+            val referenced = dao.getAllCards().flatMapTo(hashSetOf()) { listOfNotNull(it.valueImagePath, it.frontImagePath) }
+            pending.forEach { deletion ->
                 try {
-                    imageStore.delete(deletion.path)
+                    // 旧版本可能把仍被引用的卡面放入队列，升级启动时必须保留。
+                    if (deletion.path !in referenced) imageStore.delete(deletion.path)
                     dao.removePendingImageDeletion(deletion.path)
                 } catch (_: IOException) {
                     // The durable queue keeps recoverable I/O failures for the next startup retry.

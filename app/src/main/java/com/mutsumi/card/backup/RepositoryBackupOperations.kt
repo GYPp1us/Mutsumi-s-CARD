@@ -139,6 +139,7 @@ class RepositoryBackupOperations(
         .applyCloudSnapshot(snapshot, images, deleteExtras, sourcePaths)
 
     override suspend fun loadExportData(): BackupExportData {
+        cloudDataAccess?.let { return it.loadExportData() }
         val timestamp = now()
         val decks = repository.decks.first()
         val cards = decks.flatMap { repository.cards(it.id).first() }
@@ -169,6 +170,7 @@ class RepositoryBackupOperations(
     }
 
     override suspend fun importBatch(batch: ImportBatch): ImportSummary {
+        cloudDataAccess?.let { return it.importBatch(batch) }
         val deckIds = mutableMapOf<Long, Long>()
         batch.snapshot.decks.forEach { deck -> deckIds[deck.id] = repository.createDeck(deck.name) }
         val cardIds = mutableMapOf<Long, Long>()

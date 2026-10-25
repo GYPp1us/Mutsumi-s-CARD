@@ -15,7 +15,7 @@ class BackupServiceTest {
     private val json = Json
 
     @Test
-    fun `导出文件包含v2清单BuildConfig版本和流式摘要`() = runTest {
+    fun `导出文件包含v3清单BuildConfig版本和流式摘要`() = runTest {
         val image = temporaryFolder.newFile("value.png").writeFixture(validPng())
         val target = File(temporaryFolder.root, "backup.zip")
 
@@ -27,7 +27,7 @@ class BackupServiceTest {
             val manifest = json.decodeFromString<BackupManifest>(
                 zip.getInputStream(zip.getEntry("manifest.json")).readBytes().decodeToString(),
             )
-            assertThat(manifest.formatVersion).isEqualTo(2)
+            assertThat(manifest.formatVersion).isEqualTo(3)
             assertThat(manifest.appVersion).isEqualTo(BuildConfig.VERSION_NAME)
             assertThat(manifest.exportedAt).isEqualTo(100)
             val imageResource = manifest.resources.single { it.path.startsWith("images/") }

@@ -44,7 +44,7 @@ class BackupValidatorTest {
     fun `拒绝路径重复缺失版本和摘要问题`() = runTest {
         assertInvalid(zipOf("../x" to byteArrayOf(1)), "路径")
         assertInvalid(zipOf("manifest.json" to byteArrayOf(1)), "database.json")
-        assertInvalid(createArchive(formatVersion = 3), "版本")
+        assertInvalid(createArchive(formatVersion = 4), "版本")
         assertInvalid(createArchive(imageSha = "0".repeat(64)), "SHA-256")
         assertInvalid(createArchive(imageSize = 1), "大小")
     }

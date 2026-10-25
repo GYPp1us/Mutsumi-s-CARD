@@ -30,6 +30,7 @@ data class CloudSnapshotSummary(
     val addedOrChangedDeckCount: Int = 0,
     val deletedDeckCount: Int = 0,
     val imageHashes: List<String> = emptyList(),
+    val storageVersion: Int = 2,
 )
 
 @Serializable
@@ -52,6 +53,8 @@ data class CloudDeckRecord(
     val name: String,
     val createdAt: Long,
     val updatedAt: Long,
+    val parentSyncId: String? = null,
+    val archived: Boolean = false,
 )
 
 @Serializable

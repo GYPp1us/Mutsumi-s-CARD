@@ -13,6 +13,14 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 abstract class CardDao {
+    @Query("SELECT COALESCE((SELECT revision FROM library_revision WHERE id = 1), 0)")
+    abstract suspend fun getLibraryRevision(): Long
+
+    @Transaction
+    open suspend fun getLibraryRows(): LibraryRows = LibraryRows(
+        getLibraryRevision(), getAllDecks(), getAllCards(), getAllReviewStates(),
+    )
+
     @Insert
     abstract suspend fun insertDeck(deck: DeckEntity): Long
 
@@ -100,6 +108,10 @@ abstract class CardDao {
     abstract fun observeActiveCardsWithReview(deckId: Long): Flow<List<CardWithReviewState>>
 
     @Transaction
+    @Query("SELECT * FROM cards WHERE deckId = :deckId AND (:includeArchived = 1 OR archived = 0) AND instr(keyText, :query) > 0 ORDER BY updatedAt DESC, id DESC")
+    abstract fun observeManagementCards(deckId: Long, query: String, includeArchived: Boolean): Flow<List<CardWithReviewState>>
+
+    @Transaction
     @Query(
         """
         SELECT * FROM cards
@@ -130,7 +142,7 @@ abstract class CardDao {
     @Query("DELETE FROM pending_image_deletions WHERE path = :path")
     abstract suspend fun removePendingImageDeletion(path: String): Int
 
-    @Query("SELECT * FROM decks ORDER BY createdAt ASC, id ASC LIMIT 1")
+    @Query("SELECT * FROM decks WHERE archived = 0 AND parentId IS NULL ORDER BY createdAt ASC, id ASC LIMIT 1")
     protected abstract suspend fun findEarliestDeck(): DeckEntity?
 
     @Transaction
@@ -179,6 +191,9 @@ abstract class CardDao {
 
     @Transaction
     open suspend fun applySyncRows(rows: SyncApplyRows) {
+        if (rows.expectedRevision != null && getLibraryRevision() != rows.expectedRevision) {
+            throw com.mutsumi.card.backup.CloudBackupException("本地数据已变化，请重新预览")
+        }
         rows.cardsToDelete.forEach { card ->
             deleteCardRow(card)
             insertPendingImageDeletion(PendingImageDeletionEntity(card.valueImagePath, rows.queuedAt))

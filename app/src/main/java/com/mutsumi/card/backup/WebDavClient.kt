@@ -2,6 +2,7 @@ package com.mutsumi.card.backup
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.NonCancellable
 import okhttp3.Credentials
 import okhttp3.Headers
 import okhttp3.MediaType.Companion.toMediaType
@@ -25,8 +26,9 @@ interface CloudRemoteStore {
 
 class WebDavClient(
     private val config: CloudBackupConfig,
-    private val client: OkHttpClient,
+    client: OkHttpClient,
 ) : CloudRemoteStore {
+    private val client = client.newBuilder().followRedirects(false).followSslRedirects(false).build()
     private val baseUrl = validateConfig(config)
     private val authorization = Credentials.basic(config.username, config.password, Charsets.UTF_8)
     private val rootSegments = config.remoteDirectory.split('/')
@@ -39,15 +41,18 @@ class WebDavClient(
         }
         mkcol(listOf("snapshots"))
         mkcol(listOf("objects"))
+        mkcol(listOf("library-v3"))
+        mkcol(listOf("library-v3", "snapshots"))
+        mkcol(listOf("library-v3", "objects"))
     }
 
     override suspend fun get(path: String): ByteArray? = getWithVersion(path)?.bytes
 
     override suspend fun getWithVersion(path: String): CloudRemoteFile? = execute(
         Request.Builder().url(resolve(path)).get().authorized().build(),
-    ) { code, bytes, headers ->
+    ) { code, bytes, _ ->
         when (code) {
-            200 -> CloudRemoteFile(bytes, headers["ETag"])
+            200 -> CloudRemoteFile(bytes, sha256(bytes))
             404 -> null
             else -> throw responseError("读取", code)
         }
@@ -70,23 +75,35 @@ class WebDavClient(
         contentType: String,
         expectedVersion: String?,
     ): Boolean {
-        val request = Request.Builder()
-            .url(resolve(path))
-            .put(bytes.toRequestBody(contentType.toMediaType()))
-            .authorized()
-            .apply {
-                if (expectedVersion == null) {
-                    header("If-None-Match", "*")
-                } else {
-                    header("If-Match", expectedVersion)
-                }
-            }
-            .build()
-        return execute(request) { code, _, _ ->
+        val lockPath = ".library-write-lock"
+        val request = Request.Builder().url(resolve(lockPath)).method("MKCOL", null).authorized().build()
+        withContext(NonCancellable + Dispatchers.IO) { execute(request) { code, _, _ ->
             when (code) {
-                in 200..204 -> true
-                412 -> false
-                else -> throw responseError("发布索引", code)
+                200, 201, 204 -> Unit
+                405, 409, 423 -> throw CloudBackupException("另一项云端提交尚未完成，请稍后重试；若应用曾意外中断，请先处理遗留提交锁")
+                else -> throw responseError("建立提交锁", code)
+            }
+        } }
+        var published = false
+        var failure: Throwable? = null
+        try {
+            // 真实 AList 会忽略条件请求头；目录锁内核对内容哈希，不能信任 ETag。
+            if (getWithVersion(path)?.version != expectedVersion) return false
+            put(path, bytes, contentType)
+            published = true
+            val written = get(path)
+            if (written == null || !written.contentEquals(bytes)) throw CloudBackupException("云端提交回读不一致，请停止同步并保全现有数据")
+            return true
+        } catch (error: Throwable) {
+            failure = error
+            throw error
+        } finally {
+            withContext(NonCancellable + Dispatchers.IO) {
+                try { delete(lockPath) }
+                catch (cleanup: Exception) {
+                    if (failure != null) failure.addSuppressed(cleanup)
+                    else throw CloudBackupException(if (published) "索引已发布，但提交锁未能释放，请先处理连接状态" else "未发布索引，但提交锁未能释放", cleanup)
+                }
             }
         }
     }
@@ -121,7 +138,19 @@ class WebDavClient(
         withContext(Dispatchers.IO) {
             try {
                 client.newCall(request).execute().use { response ->
-                    consume(response.code, response.body?.bytes() ?: byteArrayOf(), response.headers)
+                    val maximum = if (request.url.encodedPath.endsWith(".png")) 16L * 1024 * 1024 else 8L * 1024 * 1024
+                    val bytes = response.body?.byteStream()?.use { stream ->
+                        val output = java.io.ByteArrayOutputStream()
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        while (true) {
+                            val count = stream.read(buffer)
+                            if (count < 0) break
+                            if (output.size().toLong() + count > maximum) throw CloudBackupException("云端响应过大，已停止读取")
+                            output.write(buffer, 0, count)
+                        }
+                        output.toByteArray()
+                    } ?: byteArrayOf()
+                    consume(response.code, bytes, response.headers)
                 }
             } catch (error: CloudBackupException) {
                 throw error
@@ -143,6 +172,9 @@ class WebDavClient(
                 throw CloudBackupException("WebDAV 地址无效", error)
             }
             if (!server.isHttps) throw CloudBackupException("WebDAV 地址必须使用 HTTPS")
+            if (server.username.isNotEmpty() || server.password.isNotEmpty() || server.query != null || server.fragment != null) {
+                throw CloudBackupException("WebDAV 地址不能包含账号密码、查询参数或片段，请使用独立的用户名和密码字段")
+            }
             if (config.username.isBlank()) throw CloudBackupException("WebDAV 用户名不能为空")
             if (config.password.isBlank()) throw CloudBackupException("WebDAV 密码不能为空")
             safeRelativePath(config.remoteDirectory)

@@ -6,6 +6,7 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import androidx.room.Relation
+import androidx.room.ColumnInfo
 
 @Entity(
     tableName = "decks",
@@ -17,6 +18,16 @@ data class DeckEntity(
     val createdAt: Long,
     val updatedAt: Long,
     val syncId: String = java.util.UUID.randomUUID().toString(),
+    @ColumnInfo(defaultValue = "NULL") val parentId: Long? = null,
+    @ColumnInfo(defaultValue = "0") val archived: Boolean = false,
+)
+
+@Entity(tableName = "library_revision")
+data class LibraryRevisionEntity(@PrimaryKey val id: Int = 1, val revision: Long = 0)
+
+data class LibraryRows(
+    val revision: Long, val decks: List<DeckEntity>, val cards: List<CardEntity>,
+    val reviews: List<ReviewStateEntity>,
 )
 
 @Entity(
@@ -94,4 +105,5 @@ data class SyncApplyRows(
     val decksToDelete: List<DeckEntity>,
     val oldImagesToDelete: List<String>,
     val queuedAt: Long,
+    val expectedRevision: Long? = null,
 )

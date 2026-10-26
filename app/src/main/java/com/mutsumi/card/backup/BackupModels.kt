@@ -4,7 +4,7 @@ import kotlinx.serialization.Serializable
 import java.io.Closeable
 import java.io.File
 
-const val BACKUP_FORMAT_VERSION = 2
+const val BACKUP_FORMAT_VERSION = 3
 
 @Serializable
 data class BackupManifest(
@@ -33,7 +33,8 @@ data class BackupSnapshot(
 )
 
 @Serializable
-data class BackupDeck(val id: Long, val name: String, val createdAt: Long, val updatedAt: Long)
+data class BackupDeck(val id: Long, val name: String, val createdAt: Long, val updatedAt: Long,
+    val parentId: Long? = null, val archived: Boolean = false)
 
 @Serializable
 data class BackupCard(

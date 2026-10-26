@@ -30,6 +30,7 @@ data class CloudSnapshotSummary(
     val addedOrChangedDeckCount: Int = 0,
     val deletedDeckCount: Int = 0,
     val imageHashes: List<String> = emptyList(),
+    val storageVersion: Int = 2,
 )
 
 @Serializable
@@ -52,6 +53,8 @@ data class CloudDeckRecord(
     val name: String,
     val createdAt: Long,
     val updatedAt: Long,
+    val parentSyncId: String? = null,
+    val archived: Boolean = false,
 )
 
 @Serializable
@@ -84,112 +87,8 @@ data class CloudImageReference(
     val sourcePath: String? = null,
 )
 
-data class CloudLocalState(
-    val document: CloudSnapshotDocument,
-    val bytesByHash: Map<String, ByteArray>,
-)
-
-data class CloudBackupOverview(
-    val snapshots: List<CloudSnapshotSummary>,
-    val current: CloudChangeStats,
-)
-
-data class CloudChangeStats(
-    val cardCount: Int,
-    val deckCount: Int,
-    val addedOrChangedCount: Int,
-    val deletedCount: Int,
-    val addedOrChangedDeckCount: Int,
-    val deletedDeckCount: Int,
-)
-
-data class CloudBackupResult(
-    val overview: CloudBackupOverview,
-    val createdSnapshot: Boolean,
-    val warnings: List<String> = emptyList(),
-)
-
-data class CloudPreviewCard(
-    val deckName: String,
-    val keyText: String,
-    val frontPng: ByteArray?,
-    val backPng: ByteArray,
-)
-
-data class CloudRestorePreview(
-    val snapshotId: String,
-    val createdAt: Long,
-    val stats: CloudChangeStats,
-    val cards: List<CloudPreviewCard>,
-    val deletionWarning: String? = null,
-)
-
-/**
- * Applies to records which changed on both devices since the last successful sync.
- *
- * A single choice for the whole conflict set is intentional: deck, card and review
- * records have referential relationships, so allowing an arbitrary mixed selection
- * can create a card that has no surviving deck.
- */
-enum class CloudConflictResolution {
-    KeepLocal,
-    UseCloud,
-}
-
 enum class CloudConflictKind(val label: String) {
-    Deck("卡组"),
-    Card("卡片"),
-    Review("复习状态"),
-}
-
-data class CloudConflict(
-    val key: String,
-    val kind: CloudConflictKind,
-    val localSummary: String,
-    val cloudSummary: String,
-    /** 仅用于确认重试时验证同一份冲突，不展示给用户。 */
-    val fingerprint: String = "$localSummary\u0000$cloudSummary",
-)
-
-sealed interface CloudConflictAction {
-    data class Backup(val pushDelete: Boolean) : CloudConflictAction
-    data class PreviewRestore(val snapshotId: String, val pullDelete: Boolean) : CloudConflictAction
-    data class Restore(val snapshotId: String, val pullDelete: Boolean) : CloudConflictAction
-}
-
-data class PendingCloudConflict(
-    val conflicts: List<CloudConflict>,
-    val action: CloudConflictAction,
-)
-
-class CloudConflictException(
-    val entries: List<CloudConflict>,
-) : IOException("检测到本地与云端同时修改：${entries.joinToString("、") { it.key }}") {
-    val conflicts: List<String> = entries.map(CloudConflict::key)
+    Deck("卡组"), Card("卡片"), Review("复习状态"),
 }
 
 class CloudBackupException(message: String, cause: Throwable? = null) : IOException(message, cause)
-
-interface CloudBackupOperations {
-    suspend fun inspect(config: CloudBackupConfig): CloudBackupOverview
-    suspend fun backup(
-        config: CloudBackupConfig,
-        pushDelete: Boolean = false,
-        conflictResolution: CloudConflictResolution? = null,
-        expectedConflicts: List<CloudConflict>? = null,
-    ): CloudBackupResult
-    suspend fun previewRestore(
-        config: CloudBackupConfig,
-        snapshotId: String,
-        pullDelete: Boolean = false,
-        conflictResolution: CloudConflictResolution? = null,
-        expectedConflicts: List<CloudConflict>? = null,
-    ): CloudRestorePreview
-    suspend fun restore(
-        config: CloudBackupConfig,
-        snapshotId: String,
-        pullDelete: Boolean = false,
-        conflictResolution: CloudConflictResolution? = null,
-        expectedConflicts: List<CloudConflict>? = null,
-    ): ImportSummary
-}

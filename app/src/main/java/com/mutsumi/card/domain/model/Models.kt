@@ -4,6 +4,8 @@ data class Deck(
     val id: Long,
     val name: String,
     val cardCount: Int,
+    val parentId: Long? = null,
+    val archived: Boolean = false,
 )
 
 data class ReviewState(

@@ -136,6 +136,15 @@ internal fun validateSnapshot(snapshot: BackupSnapshot) {
         if (deck.createdAt < 0 || deck.updatedAt < 0) throw BackupFormatException("卡组时间不能为负数")
     }
     if (deckIds.toSet().size != deckIds.size) throw BackupFormatException("数据库包含重复卡组 ID")
+    val parents = snapshot.decks.associate { it.id to it.parentId }
+    snapshot.decks.forEach { deck ->
+        val visited = hashSetOf(deck.id)
+        var parent = deck.parentId
+        while (parent != null) {
+            if (parent !in parents || !visited.add(parent)) throw BackupFormatException("卡组父级缺失或层级循环")
+            parent = parents[parent]
+        }
+    }
     val cardIds = snapshot.cards.map { it.id }
     if (cardIds.toSet().size != cardIds.size) throw BackupFormatException("数据库包含重复卡片 ID")
     val reviewIds = snapshot.reviews.map { it.cardId }

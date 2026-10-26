@@ -95,42 +95,74 @@ class BackupViewModelTest {
         assertThat(viewModel.state.value.message).contains("清理已排队")
     }
 
-    @Test
-    fun `云端冲突会展示决策并将所选策略传回同步操作`() = runTest {
-        val cloud = ConflictCloudOperations()
-        val settings = object : CloudBackupSettings {
+    @Test fun `增量推送必须预览后才能执行且执行中不重复提交`() = runTest {
+        val sync = PreviewSync()
+        val vm = configuredViewModel(this, sync)
+        vm.confirmSyncPreview()
+        assertThat(sync.executions).isEqualTo(0)
+        vm.previewSync(CloudSyncMode.Push)
+        advanceUntilIdle()
+        assertThat(sync.executions).isEqualTo(0)
+        assertThat(vm.state.value.syncPreview).isNotNull()
+        vm.confirmSyncPreview(); vm.confirmSyncPreview()
+        advanceUntilIdle()
+        assertThat(sync.executions).isEqualTo(1)
+        assertThat(vm.state.value.syncPreview).isNull()
+    }
+
+    @Test fun `删除预览还需滑动确认标记配置变化后旧预览失效`() = runTest {
+        val sync = PreviewSync()
+        val vm = configuredViewModel(this, sync)
+        vm.previewSync(CloudSyncMode.PullDelete); advanceUntilIdle()
+        vm.confirmSyncPreview(); advanceUntilIdle()
+        assertThat(sync.executions).isEqualTo(0)
+        assertThat(vm.state.value.message).contains("滑动确认")
+        vm.confirmSyncPreview(deletionConfirmed = true); advanceUntilIdle()
+        assertThat(sync.executions).isEqualTo(1)
+        vm.previewSync(CloudSyncMode.Pull); advanceUntilIdle()
+        vm.setCloudRemoteDirectory("另一个目录")
+        vm.confirmSyncPreview(); advanceUntilIdle()
+        assertThat(sync.executions).isEqualTo(1)
+        assertThat(vm.state.value.syncPreview).isNull()
+    }
+
+    @Test fun `执行成功后刷新失败仍明确报告操作成功不复用令牌`() = runTest {
+        val sync = PreviewSync()
+        val vm = configuredViewModel(this, sync)
+        vm.previewSync(CloudSyncMode.Push); advanceUntilIdle()
+        sync.failInspect = true
+        vm.confirmSyncPreview(); advanceUntilIdle()
+        assertThat(sync.executions).isEqualTo(1)
+        assertThat(vm.state.value.message).contains("同步已完成")
+        assertThat(vm.state.value.errorMessage).isNull()
+        assertThat(vm.state.value.syncPreview).isNull()
+    }
+
+    private suspend fun configuredViewModel(scope: TestScope, sync: PreviewSync): BackupViewModel {
+        val vm = BackupViewModel(object : BackupOperations {
+            override suspend fun export(output: OutputStream) = ExportSummary(0)
+            override suspend fun import(input: InputStream) = ImportSummary(0, 0)
+        }, scope, object : CloudBackupSettings {
             override fun load(): CloudBackupConfig? = null
             override fun save(config: CloudBackupConfig) = Unit
+        }, sync)
+        vm.setCloudServerUrl("https://example.test"); vm.setCloudUsername("测试"); vm.setCloudPassword("仅测试")
+        vm.saveCloudConfig(); scope.testScheduler.advanceUntilIdle()
+        return vm
+    }
+
+    private class PreviewSync : CloudSyncOperations {
+        var executions = 0
+        var failInspect = false
+        override suspend fun inspect(config: CloudBackupConfig): CloudLibraryIndex? {
+            if (failInspect) throw IOException("断线")
+            return null
         }
-        val viewModel = BackupViewModel(
-            operations = object : BackupOperations {
-                override suspend fun export(output: OutputStream) = ExportSummary(0)
-                override suspend fun import(input: InputStream) = ImportSummary(0, 0)
-            },
-            operationScope = this,
-            cloudOperations = cloud,
-            cloudSettings = settings,
-        )
-        viewModel.setCloudServerUrl("https://example.test/dav")
-        viewModel.setCloudUsername("user")
-        viewModel.setCloudPassword("password")
-        viewModel.saveCloudConfig()
-        advanceUntilIdle()
-
-        viewModel.backupToCloud()
-        advanceUntilIdle()
-
-        val pending = requireNotNull(viewModel.state.value.pendingCloudConflict)
-        assertThat(pending.conflicts.single().kind).isEqualTo(CloudConflictKind.Card)
-        assertThat(viewModel.state.value.message).contains("请选择")
-
-        viewModel.resolveCloudConflict(CloudConflictResolution.KeepLocal)
-        advanceUntilIdle()
-
-        assertThat(cloud.receivedResolution).isEqualTo(CloudConflictResolution.KeepLocal)
-        assertThat(cloud.receivedExpectedConflicts).isEqualTo(pending.conflicts)
-        assertThat(viewModel.state.value.pendingCloudConflict).isNull()
-        assertThat(viewModel.state.value.message).contains("云端增量备份完成")
+        override suspend fun preview(config: CloudBackupConfig, mode: CloudSyncMode, snapshotId: String?): CloudSyncPreview =
+            CloudSyncPreview("令牌", mode, CloudSyncPlan(CloudSnapshotDocument(snapshot = CloudSnapshot(emptyList(), emptyList(), emptyList()), images = emptyList()), emptyList()), 0, 0)
+        override suspend fun execute(config: CloudBackupConfig, token: String, progress: (CloudSyncProgress) -> Unit): ImportSummary {
+            executions++; kotlinx.coroutines.yield(); progress(CloudSyncProgress("完成", 1, 1)); return ImportSummary(0, 1)
+        }
     }
 
     private fun viewModel(scope: TestScope, operations: BackupOperations = SuspendingOperations()) =
@@ -149,61 +181,4 @@ class BackupViewModelTest {
         }
     }
 
-    private class ConflictCloudOperations : CloudBackupOperations {
-        var receivedResolution: CloudConflictResolution? = null
-        var receivedExpectedConflicts: List<CloudConflict>? = null
-
-        override suspend fun inspect(config: CloudBackupConfig): CloudBackupOverview = overview()
-
-        override suspend fun backup(
-            config: CloudBackupConfig,
-            pushDelete: Boolean,
-            conflictResolution: CloudConflictResolution?,
-            expectedConflicts: List<CloudConflict>?,
-        ): CloudBackupResult {
-            if (conflictResolution == null) {
-                throw CloudConflictException(
-                    listOf(
-                        CloudConflict(
-                            key = "card-card-1",
-                            kind = CloudConflictKind.Card,
-                            localSummary = "本地卡片",
-                            cloudSummary = "云端卡片",
-                        ),
-                    ),
-                )
-            }
-            receivedResolution = conflictResolution
-            receivedExpectedConflicts = expectedConflicts
-            return CloudBackupResult(overview(), createdSnapshot = true)
-        }
-
-        override suspend fun previewRestore(
-            config: CloudBackupConfig,
-            snapshotId: String,
-            pullDelete: Boolean,
-            conflictResolution: CloudConflictResolution?,
-            expectedConflicts: List<CloudConflict>?,
-        ): CloudRestorePreview = error("unused")
-
-        override suspend fun restore(
-            config: CloudBackupConfig,
-            snapshotId: String,
-            pullDelete: Boolean,
-            conflictResolution: CloudConflictResolution?,
-            expectedConflicts: List<CloudConflict>?,
-        ): ImportSummary = error("unused")
-
-        private fun overview(): CloudBackupOverview = CloudBackupOverview(
-            snapshots = emptyList(),
-            current = CloudChangeStats(
-                cardCount = 1,
-                deckCount = 1,
-                addedOrChangedCount = 1,
-                deletedCount = 0,
-                addedOrChangedDeckCount = 0,
-                deletedDeckCount = 0,
-            ),
-        )
-    }
 }

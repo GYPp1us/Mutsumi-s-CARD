@@ -49,7 +49,7 @@ class BackupImporter(
         }
 
         val snapshot = BackupSnapshot(
-            decks = archive.snapshot.decks.map { it.copy(id = deckIds.getValue(it.id)) },
+            decks = archive.snapshot.decks.map { it.copy(id = deckIds.getValue(it.id), parentId = it.parentId?.let(deckIds::getValue)) },
             cards = archive.snapshot.cards.map { card ->
                 card.copy(
                     id = cardIds.getValue(card.id),

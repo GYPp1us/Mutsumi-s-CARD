@@ -97,6 +97,49 @@ class MutsumiCardDatabaseMigrationTest {
         }
     }
 
+    @Test
+    fun 从版本5升级到6保留全部内容并追踪每种数据库写入() {
+        helper.createDatabase(DATABASE_NAME, 5).apply {
+            execSQL("INSERT INTO decks (id,name,createdAt,updatedAt,syncId) VALUES (7,'数学',10,20,'d7')")
+            execSQL("INSERT INTO cards (id,deckId,keyText,valueImagePath,createdAt,updatedAt,archived,frontImagePath,syncId) VALUES (11,7,'梯度','images/back.png',12,22,1,'images/front.png','c11')")
+            execSQL("INSERT INTO review_states (cardId,weight,seenCount,againCount,unsureCount,knownCount,lastReviewedAt) VALUES (11,1.5,3,1,1,1,30)")
+            close()
+        }
+        helper.runMigrationsAndValidate(DATABASE_NAME, 6, true, *MutsumiCardDatabase.ALL_MIGRATIONS).use { db ->
+            db.query("SELECT parentId,archived FROM decks WHERE id=7").use { cursor ->
+                assertTrue(cursor.moveToFirst()); assertTrue(cursor.isNull(0)); assertEquals(0, cursor.getInt(1))
+            }
+            db.query("SELECT keyText,valueImagePath,frontImagePath,archived FROM cards WHERE id=11").use { cursor ->
+                assertTrue(cursor.moveToFirst()); assertEquals("梯度", cursor.getString(0)); assertEquals("images/back.png", cursor.getString(1))
+                assertEquals("images/front.png", cursor.getString(2)); assertEquals(1, cursor.getInt(3))
+            }
+            fun revision(): Long = db.query("SELECT revision FROM library_revision WHERE id=1").use { it.moveToFirst(); it.getLong(0) }
+            var previous = revision()
+            listOf("UPDATE decks SET name='数学二' WHERE id=7", "UPDATE cards SET keyText='梯度二' WHERE id=11",
+                "UPDATE review_states SET weight=2 WHERE cardId=11").forEach { sql ->
+                db.execSQL(sql); assertTrue(revision() > previous); previous = revision()
+            }
+        }
+    }
+
+    @Test
+    fun 从版本1直接升级到6保留旧卡片与复习状态() {
+        helper.createDatabase(DATABASE_NAME, 1).apply {
+            execSQL("INSERT INTO decks (id,name,createdAt,updatedAt) VALUES (1,'旧卡组',10,20)")
+            execSQL("INSERT INTO cards (id,deckId,keyText,valueImagePath,createdAt,updatedAt,archived) VALUES (2,1,'旧卡片','images/old.png',11,21,0)")
+            execSQL("INSERT INTO review_states (cardId,weight,seenCount,againCount,unsureCount,knownCount,lastReviewedAt) VALUES (2,1.5,3,1,1,1,30)")
+            close()
+        }
+        helper.runMigrationsAndValidate(DATABASE_NAME, 6, true, *MutsumiCardDatabase.ALL_MIGRATIONS).use { db ->
+            db.query("SELECT keyText,syncId FROM cards WHERE id=2").use { cursor ->
+                assertTrue(cursor.moveToFirst()); assertEquals("旧卡片", cursor.getString(0)); assertFalse(cursor.getString(1).isBlank())
+            }
+            db.query("SELECT seenCount,weight FROM review_states WHERE cardId=2").use { cursor ->
+                assertTrue(cursor.moveToFirst()); assertEquals(3, cursor.getInt(0)); assertEquals(1.5, cursor.getDouble(1), 0.0)
+            }
+        }
+    }
+
     private fun columnDefault(
         database: androidx.sqlite.db.SupportSQLiteDatabase,
         table: String,

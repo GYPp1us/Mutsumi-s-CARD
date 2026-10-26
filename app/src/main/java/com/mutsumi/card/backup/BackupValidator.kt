@@ -88,7 +88,7 @@ class BackupValidator(
         val manifestEntry = entries[MANIFEST_PATH] ?: throw BackupFormatException("缺失 manifest.json")
         val databaseEntry = entries[DATABASE_PATH] ?: throw BackupFormatException("缺失 database.json")
         val manifest = decode<BackupManifest>(requireNotNull(manifestEntry.bytes), MANIFEST_PATH)
-        if (manifest.formatVersion != BACKUP_FORMAT_VERSION) {
+        if (manifest.formatVersion !in 2..BACKUP_FORMAT_VERSION) {
             throw BackupFormatException("不兼容的备份版本：${manifest.formatVersion}")
         }
         validateManifest(manifest, entries)

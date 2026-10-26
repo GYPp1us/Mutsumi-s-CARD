@@ -13,8 +13,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CardEntity::class,
         ReviewStateEntity::class,
         PendingImageDeletionEntity::class,
+        LibraryRevisionEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 abstract class MutsumiCardDatabase : RoomDatabase() {
@@ -150,11 +151,34 @@ abstract class MutsumiCardDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE decks ADD COLUMN parentId INTEGER DEFAULT NULL")
+                database.execSQL("ALTER TABLE decks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("CREATE TABLE IF NOT EXISTS library_revision (id INTEGER NOT NULL PRIMARY KEY, revision INTEGER NOT NULL)")
+                installRevisionTriggers(database)
+            }
+        }
+
+        private fun installRevisionTriggers(database: SupportSQLiteDatabase) {
+            database.execSQL("INSERT OR IGNORE INTO library_revision (id, revision) VALUES (1, ${System.currentTimeMillis()})")
+            listOf("decks", "cards", "review_states").forEach { table ->
+                listOf("INSERT", "UPDATE", "DELETE").forEach { action ->
+                    database.execSQL("CREATE TRIGGER IF NOT EXISTS revision_${table}_${action} AFTER $action ON $table BEGIN UPDATE library_revision SET revision = revision + 1 WHERE id = 1; END")
+                }
+            }
+        }
+
+        private val REVISION_CALLBACK = object : Callback() {
+            override fun onOpen(db: SupportSQLiteDatabase) { installRevisionTriggers(db) }
+        }
+
         internal val ALL_MIGRATIONS = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
             MIGRATION_3_4,
             MIGRATION_4_5,
+            MIGRATION_5_6,
         )
 
         fun build(context: Context): MutsumiCardDatabase =
@@ -162,14 +186,14 @@ abstract class MutsumiCardDatabase : RoomDatabase() {
                 context.applicationContext,
                 MutsumiCardDatabase::class.java,
                 DATABASE_NAME,
-            ).addMigrations(*ALL_MIGRATIONS)
+            ).addMigrations(*ALL_MIGRATIONS).addCallback(REVISION_CALLBACK)
                 .build()
 
         fun inMemory(context: Context): MutsumiCardDatabase =
             Room.inMemoryDatabaseBuilder(
                 context.applicationContext,
                 MutsumiCardDatabase::class.java,
-            ).build()
+            ).addCallback(REVISION_CALLBACK).build()
     }
 
 }

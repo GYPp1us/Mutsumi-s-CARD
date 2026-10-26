@@ -42,7 +42,7 @@ import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
 
 @Composable
-internal fun SlideToComplete(enabled: Boolean, modifier: Modifier = Modifier, onComplete: () -> Unit) {
+internal fun SlideToComplete(enabled: Boolean, modifier: Modifier = Modifier, label: String = "完成制作", tag: String = "complete-card", destructive: Boolean = false, onComplete: () -> Unit) {
     var width by remember { mutableIntStateOf(0) }
     var progress by remember { mutableFloatStateOf(0f) }
     var dragging by remember { mutableStateOf(false) }
@@ -51,11 +51,12 @@ internal fun SlideToComplete(enabled: Boolean, modifier: Modifier = Modifier, on
     val shown by animateFloatAsState(progress, tween(if (dragging) 0 else 180), label = "完成滑块回位")
     val complete by rememberUpdatedState(onComplete)
     Surface(
-        color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(8.dp), shadowElevation = 4.dp,
-        modifier = modifier.height(48.dp).testTag("complete-card").onSizeChanged { width = it.width }
+        color = if (destructive) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer,
+        shape = RoundedCornerShape(8.dp), shadowElevation = 4.dp,
+        modifier = modifier.height(48.dp).testTag(tag).onSizeChanged { width = it.width }
             .semantics {
-                contentDescription = "滑动完成制作"
-                customActions = listOf(CustomAccessibilityAction("完成制作") { if (enabled) { complete(); true } else false })
+                contentDescription = "滑动$label"
+                customActions = listOf(CustomAccessibilityAction(label) { if (enabled) { complete(); true } else false })
             }
             .pointerInput(enabled, travel) {
                 if (enabled) awaitEachGesture {
@@ -84,12 +85,12 @@ internal fun SlideToComplete(enabled: Boolean, modifier: Modifier = Modifier, on
             },
     ) {
         Box(Modifier.fillMaxSize().padding(2.dp), contentAlignment = Alignment.Center) {
-            Text("完成制作", fontSize = 12.sp, modifier = Modifier.padding(start = 24.dp))
+            Text(label, fontSize = 12.sp, modifier = Modifier.padding(start = 24.dp))
             Box(
                 Modifier.align(Alignment.CenterStart).offset { IntOffset((shown * travel).roundToInt(), 0) }
-                    .size(44.dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(6.dp)),
+                    .size(44.dp).background(if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary, RoundedCornerShape(6.dp)),
                 contentAlignment = Alignment.Center,
-            ) { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onPrimary) }
+            ) { Icon(Icons.Default.ChevronRight, null, tint = if (destructive) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary) }
         }
     }
 }

@@ -6,82 +6,124 @@ import com.mutsumi.card.data.local.CardEntity
 import com.mutsumi.card.data.local.DeckEntity
 import com.mutsumi.card.data.local.ReviewStateEntity
 import com.mutsumi.card.data.local.SyncApplyRows
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import java.io.File
+import java.io.FileOutputStream
 
 class RoomCloudBackupDataAccess(
     private val dao: CardDao,
     private val imageStore: CardImageStore,
     private val now: () -> Long = System::currentTimeMillis,
-) : CloudBackupDataAccess {
-    override suspend fun loadExportData(): BackupExportData = error("云同步数据访问层不负责本地 ZIP 导出")
+    private val indexFile: File? = null,
+) : BackupDataAccess, CloudSyncDataAccess {
+    private val indexMutex = Mutex()
+    private val json = Json { encodeDefaults = true }
+    @Volatile private var cached: LocalLibraryCache? = null
 
-    override suspend fun importBatch(batch: ImportBatch): ImportSummary = error("云同步数据访问层不负责本地 ZIP 导入")
-
-    override suspend fun loadCloudState(): CloudLocalState {
-        dao.ensureSyncIds()
-        val decks = dao.getAllDecks()
-        val cards = dao.getAllCards()
-        val reviews = dao.getAllReviewStates().associateBy { it.cardId }
-        val bytes = linkedMapOf<String, ByteArray>()
-        val deckById = decks.associateBy { it.id }
-        val cloudCards = cards.map { card ->
-            val valueBytes = imageStore.read(card.valueImagePath)
-            val valueHash = sha256(valueBytes).also { bytes.putIfAbsent(it, valueBytes) }
-            val frontHash = card.frontImagePath?.let { path ->
-                val frontBytes = imageStore.read(path)
-                sha256(frontBytes).also { bytes.putIfAbsent(it, frontBytes) }
+    override suspend fun readMetadata(): CloudMetadataState = indexMutex.withLock {
+        val revision = dao.getLibraryRevision()
+        val previous = cached ?: indexFile?.takeIf { it.isFile }?.let {
+            try { json.decodeFromString<LocalLibraryCache>(it.readText()) }
+            catch (error: kotlinx.serialization.SerializationException) {
+                android.util.Log.w("MutsumiCard", "派生索引缓存损坏，重新生成", error)
+                null
             }
-            CloudCardRecord(
-                syncId = card.syncId,
-                deckSyncId = requireNotNull(deckById[card.deckId]).syncId,
-                keyText = card.keyText,
-                createdAt = card.createdAt,
-                updatedAt = card.updatedAt,
-                archived = card.archived,
-                valueImageSha256 = valueHash,
-                frontImageSha256 = frontHash,
-            )
         }
-        val cloudReviews = cards.map { card ->
-            val review = requireNotNull(reviews[card.id]) { "卡片 ${card.id} 缺少复习状态" }
-            CloudReviewRecord(
-                cardSyncId = card.syncId,
-                weight = review.weight,
-                seenCount = review.seenCount,
-                againCount = review.againCount,
-                unsureCount = review.unsureCount,
-                knownCount = review.knownCount,
-                lastReviewedAt = review.lastReviewedAt,
-            )
+        if (previous?.revision == revision) {
+            cached = previous
+            return@withLock CloudMetadataState(previous.document, revision.toString())
         }
-        val snapshot = CloudSnapshot(
-            decks = decks.map { CloudDeckRecord(it.syncId, it.name, it.createdAt, it.updatedAt) },
-            cards = cloudCards,
-            reviews = cloudReviews,
-        )
-        return CloudLocalState(
-            document = CloudSnapshotDocument(
-                snapshot = snapshot,
-                images = bytes.map { (hash, data) -> CloudImageReference(hash, data.size.toLong()) },
-            ),
-            bytesByHash = bytes,
-        )
+        val rows = dao.getLibraryRows()
+        val pathRefs = linkedMapOf<String, CloudImageReference>()
+        suspend fun reference(path: String): CloudImageReference = pathRefs[path] ?: (
+            previous?.paths?.get(path) ?: imageStore.read(path).let { CloudImageReference(sha256(it), it.size.toLong(), path) }
+        ).also { pathRefs[path] = it }
+        val deckIds = rows.decks.associate { it.id to it.syncId }
+        val cardSyncIds = rows.cards.associate { it.id to it.syncId }
+        val document = CloudSnapshotDocument(snapshot = CloudSnapshot(
+            decks = rows.decks.map { CloudDeckRecord(it.syncId, it.name, it.createdAt, it.updatedAt,
+                it.parentId?.let(deckIds::getValue), it.archived) },
+            cards = rows.cards.map { CloudCardRecord(it.syncId, deckIds.getValue(it.deckId), it.keyText, it.createdAt,
+                it.updatedAt, it.archived, reference(it.valueImagePath).sha256, it.frontImagePath?.let { path -> reference(path).sha256 }) },
+            reviews = rows.reviews.map { review ->
+                CloudReviewRecord(cardSyncIds.getValue(review.cardId), review.weight, review.seenCount, review.againCount, review.unsureCount, review.knownCount, review.lastReviewedAt)
+            },
+        ), images = pathRefs.values.distinctBy { it.sha256 })
+        CloudSyncPlanner.validate(document)
+        val next = LocalLibraryCache(rows.revision, document, pathRefs)
+        indexFile?.let { target ->
+            check(target.parentFile?.let { it.isDirectory || it.mkdirs() } != false)
+            val pending = File(target.parentFile, ".${target.name}.pending")
+            FileOutputStream(pending).use { output -> output.write(json.encodeToString(next).encodeToByteArray()); output.fd.sync() }
+            atomicReplace(pending, target)
+        }
+        cached = next
+        CloudMetadataState(document, rows.revision.toString())
     }
 
-    override suspend fun applyCloudSnapshot(
-        snapshot: CloudSnapshot,
-        images: Map<String, ByteArray>,
-        deleteExtras: Boolean,
-        sourcePaths: Map<String, String>,
-    ): ImportSummary {
+    override suspend fun readImages(hashes: Set<String>): Map<String, ByteArray> {
+        val metadata = readMetadata()
+        val refs = metadata.document.images.associateBy { it.sha256 }
+        return hashes.associateWith { hash ->
+            val path = refs[hash]?.sourcePath ?: throw CloudBackupException("本地图片引用已变化，请重新预览")
+            try { imageStore.read(path) }
+            catch (error: java.io.IOException) { throw CloudBackupException("本地卡面读取失败，未执行同步", error) }
+            catch (error: IllegalArgumentException) { throw CloudBackupException("本地卡面已变化或缺失，请重新预览", error) }
+        }
+    }
+
+    suspend fun applyPlan(document: CloudSnapshotDocument, images: Map<String, ByteArray>, expectedRevision: String, deleteExtras: Boolean): ImportSummary =
+        applySnapshot(document.snapshot, images, deleteExtras, expectedRevision.toLong())
+
+    override suspend fun applyFiles(document: CloudSnapshotDocument, images: Map<String, File>, expectedRevision: String, deleteExtras: Boolean): ImportSummary =
+        applyWithImages(document.snapshot, images.keys, { hash -> images.getValue(hash).readBytes().also {
+            if (sha256(it) != hash) throw CloudBackupException("临时卡面校验失败，未提交数据库")
+        } }, deleteExtras, expectedRevision.toLong())
+    override suspend fun loadExportData(): BackupExportData {
+        val rows = dao.getLibraryRows()
+        return BackupExportData(BackupSnapshot(
+            rows.decks.map { BackupDeck(it.id, it.name, it.createdAt, it.updatedAt, it.parentId, it.archived) },
+            rows.cards.map { BackupCard(it.id, it.deckId, it.keyText, it.valueImagePath, it.createdAt, it.updatedAt, it.archived, it.frontImagePath) },
+            rows.reviews.map { BackupReviewState(it.cardId, it.weight, it.seenCount, it.againCount, it.unsureCount, it.knownCount, it.lastReviewedAt) },
+        ), rows.cards.flatMap { listOfNotNull(it.valueImagePath, it.frontImagePath) }.associateWith(imageStore::resolve))
+    }
+
+    override suspend fun importBatch(batch: ImportBatch): ImportSummary {
+        val decks = batch.snapshot.decks.associate { it.id to java.util.UUID.randomUUID().toString() }
+        val cards = batch.snapshot.cards.associate { it.id to java.util.UUID.randomUUID().toString() }
+        val hashes = batch.images.mapValues { sha256(it.value.readBytes()) }
+        val images = batch.images.entries.associate { hashes.getValue(it.key) to it.value }
+        val snapshot = CloudSnapshot(
+            batch.snapshot.decks.map { CloudDeckRecord(decks.getValue(it.id), it.name, it.createdAt, it.updatedAt, it.parentId?.let(decks::getValue), it.archived) },
+            batch.snapshot.cards.map { CloudCardRecord(cards.getValue(it.id), decks.getValue(it.deckId), it.keyText, it.createdAt, it.updatedAt, it.archived,
+                hashes.getValue(it.valueImagePath), it.frontImagePath?.let(hashes::getValue)) },
+            batch.snapshot.reviews.map { CloudReviewRecord(cards.getValue(it.cardId), it.weight, it.seenCount, it.againCount, it.unsureCount, it.knownCount, it.lastReviewedAt) },
+        )
+        return applyWithImages(snapshot, images.keys, { images.getValue(it).readBytes() }, false, null)
+    }
+
+    private suspend fun applySnapshot(snapshot: CloudSnapshot, images: Map<String, ByteArray>, deleteExtras: Boolean, expectedRevision: Long?): ImportSummary {
+        return applyWithImages(snapshot, images.keys, { images.getValue(it) }, deleteExtras, expectedRevision)
+    }
+
+    private suspend fun applyWithImages(snapshot: CloudSnapshot, imageHashes: Set<String>, imageSource: suspend (String) -> ByteArray, deleteExtras: Boolean, expectedRevision: Long?): ImportSummary {
         require(snapshot.decks.map { it.syncId }.toSet().size == snapshot.decks.size) { "云端包含重复卡组 ID" }
         require(snapshot.cards.map { it.syncId }.toSet().size == snapshot.cards.size) { "云端包含重复卡片 ID" }
         val referencedHashes = snapshot.cards.flatMap { card ->
             buildList { add(card.valueImageSha256); card.frontImageSha256?.let(::add) }
         }.toSet()
-        require(referencedHashes == images.keys) { "云端图片引用不完整" }
+        require(referencedHashes == imageHashes) { "云端图片引用不完整" }
 
-        val localDecks = dao.getAllDecks().associateBy { it.syncId }
-        val localCards = dao.getAllCards().associateBy { it.syncId }
+        val local = dao.getLibraryRows()
+        if (expectedRevision != null && expectedRevision != local.revision) throw CloudBackupException("本地数据已变化，请重新预览")
+        val localDecks = local.decks.associateBy { it.syncId }
+        val localCards = local.cards.associateBy { it.syncId }
         val remoteDeckIds = snapshot.decks.mapTo(mutableSetOf()) { it.syncId }
         val remoteCardIds = snapshot.cards.mapTo(mutableSetOf()) { it.syncId }
         val deckRows = linkedMapOf<String, DeckEntity>()
@@ -92,13 +134,19 @@ class RoomCloudBackupDataAccess(
                 name = remote.name,
                 createdAt = remote.createdAt,
                 updatedAt = remote.updatedAt,
+                archived = remote.archived,
             ) ?: DeckEntity(
                 id = nextDeckId++,
                 syncId = remote.syncId,
                 name = remote.name,
                 createdAt = remote.createdAt,
                 updatedAt = remote.updatedAt,
+                archived = remote.archived,
             )
+        }
+        snapshot.decks.forEach { remote ->
+            val row = deckRows.getValue(remote.syncId)
+            deckRows[remote.syncId] = row.copy(parentId = remote.parentSyncId?.let { deckRows.getValue(it).id })
         }
 
         val insertedCards = mutableListOf<CardEntity>()
@@ -114,22 +162,22 @@ class RoomCloudBackupDataAccess(
                 val current = localCards[remote.syncId]
                 val valuePath = resolveImagePath(
                     current?.valueImagePath,
-                    current?.let { imageStore.read(it.valueImagePath) },
+                    current?.let { cached?.paths?.get(it.valueImagePath)?.sha256 ?: sha256(imageStore.read(it.valueImagePath)) },
                     remote.valueImageSha256,
-                    images,
+                    imageSource,
                     oldImages,
                     createdImages,
                 )
                 val frontPath = remote.frontImageSha256?.let { hash ->
                     resolveImagePath(
                         current?.frontImagePath,
-                        current?.frontImagePath?.let { imageStore.read(it) },
+                        current?.frontImagePath?.let { cached?.paths?.get(it)?.sha256 ?: sha256(imageStore.read(it)) },
                         hash,
-                        images,
+                        imageSource,
                         oldImages,
                         createdImages,
                     )
-                } ?: current?.frontImagePath?.also(oldImages::add)
+                } ?: run { current?.frontImagePath?.let(oldImages::add); null }
                 val row = (current ?: CardEntity(
                     id = nextCardId++,
                     syncId = remote.syncId,
@@ -167,7 +215,7 @@ class RoomCloudBackupDataAccess(
             }
             val cardsToDelete = if (deleteExtras) localCards.values.filter { it.syncId !in remoteCardIds } else emptyList()
             val decksToDelete = if (deleteExtras) localDecks.values.filter { it.syncId !in remoteDeckIds } else emptyList()
-            dao.applySyncRows(
+            withContext(NonCancellable) { dao.applySyncRows(
                 SyncApplyRows(
                     decksToInsert = deckRows.values.filter { localDecks[it.syncId] == null },
                     decksToUpdate = deckRows.values.filter { localDecks[it.syncId] != null },
@@ -178,9 +226,10 @@ class RoomCloudBackupDataAccess(
                     decksToDelete = decksToDelete,
                     oldImagesToDelete = oldImages.distinct(),
                     queuedAt = now(),
+                    expectedRevision = expectedRevision ?: local.revision,
                 ),
             )
-            committed = true
+            committed = true }
             return ImportSummary(snapshot.decks.size, snapshot.cards.size)
         } catch (error: Exception) {
             if (!committed) {
@@ -198,15 +247,18 @@ class RoomCloudBackupDataAccess(
 
     private suspend fun resolveImagePath(
         currentPath: String?,
-        currentBytes: ByteArray?,
+        currentHash: String?,
         expectedHash: String,
-        images: Map<String, ByteArray>,
+        imageSource: suspend (String) -> ByteArray,
         oldImages: MutableList<String>,
         createdImages: MutableList<String>,
     ): String {
-        if (currentPath != null && currentBytes != null && sha256(currentBytes) == expectedHash) return currentPath
+        if (currentPath != null && currentHash == expectedHash) return currentPath
         currentPath?.let(oldImages::add)
-        return imageStore.writePng(requireNotNull(images[expectedHash]) { "缺少图片对象：$expectedHash" })
+        return imageStore.writePng(imageSource(expectedHash))
             .also(createdImages::add)
     }
 }
+
+@Serializable
+private data class LocalLibraryCache(val revision: Long, val document: CloudSnapshotDocument, val paths: Map<String, CloudImageReference>)
